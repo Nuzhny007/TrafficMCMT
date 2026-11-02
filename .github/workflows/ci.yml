@@ -17,13 +17,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # Multitarget-tracker is not installed on CI runners; the edge bridge is
-      # disabled there. Core, master node and unit tests must build without it.
+      # Stage 2 (protobuf/OpenCV) and the Multitarget-tracker bridge need
+      # packages that are not available on the default runners. CI covers the
+      # CPU-only core, the master node and the unit tests; stage 2 is verified
+      # locally (see docs/roadmap.md).
       - name: Configure
         run: >
           cmake -S . -B build
           -DCMAKE_BUILD_TYPE=Release
+          -DTRAFFICMCMT_WITH_EDGE=OFF
           -DTRAFFICMCMT_WITH_MTT=OFF
+          -DTRAFFICMCMT_WITH_PROTOBUF=OFF
           -DTRAFFICMCMT_BUILD_TESTS=ON
 
       - name: Build
@@ -31,3 +35,29 @@ jobs:
 
       - name: Test
         run: ctest --test-dir build -C Release --output-on-failure
+
+      - name: Verify Master has no Edge dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ldd build/trafficmcmt_master | tee dependencies.txt
+          if grep -Eiq 'opencv|cuda|mtracking|nvinfer' dependencies.txt; then
+            echo "trafficmcmt_master unexpectedly links an Edge dependency"
+            exit 1
+          fi
+
+      - name: Verify Master has no Edge dependencies (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $dumpbin = Get-ChildItem "${env:ProgramFiles}\Microsoft Visual Studio\*\*\VC\Tools\MSVC\*\bin\Hostx64\x64\dumpbin.exe" `
+            -ErrorAction SilentlyContinue | Select-Object -First 1
+          if (-not $dumpbin) {
+            Write-Error "dumpbin.exe not found"
+            exit 1
+          }
+          $deps = & $dumpbin.FullName /dependents build\Release\trafficmcmt_master.exe | Out-String
+          Write-Output $deps
+          if ($deps -match '(?i)opencv|cuda|mtracking|nvinfer') {
+            Write-Error "trafficmcmt_master unexpectedly links an Edge dependency"
+            exit 1
+          }

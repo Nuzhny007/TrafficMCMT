@@ -1,7 +1,7 @@
 # TrafficMCMT — архитектура
 
 > **Статус документа:** живая спецификация. Обновляется вместе с кодом.
-> **Версия:** 0.1 (Этап 1)
+> **Версия:** 0.2 (Этап 2)
 > **Дата:** 2026-11-02
 
 ## 1. Назначение и границы
@@ -57,16 +57,17 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 
 | Компонент | Расположение | Версия / примечание |
 |---|---|---|
-| Multitarget-tracker (install) | `C:\work\ecology\Multitarget-tracker_rel\install` | 1.1.0 |
+| Multitarget-tracker (install) | `C:\work\ecology\Multitarget-tracker_ocv412\install` | 1.1.0, собран против OpenCV 4.12 |
 | CMake-конфиг MTT | `...\install\lib\MTTracking\cmake` | `MTTracking_DIR` |
-| CMake-таргеты MTT | `MTTracking::mtracking`, `MTTracking::mdetection`, `MTTracking::inih` | `mtracking` → только `inih`; `mdetection` → CUDA/TensorRT |
+| CMake-таргеты MTT | `MTTracking::mtracking`, `MTTracking::mdetection`, `MTTracking::inih` | `mtracking` → только `inih`; `mdetection` → OpenCV DNN |
 | Include MTT | `MTTracking_INCLUDE_DIR` | интерфейсных include-путей у таргетов нет |
-| OpenCV | `C:\work\libraries\opencv\5.0\build\win-install` | 5.0 + contrib, есть CUDA-сборка |
+| OpenCV | `C:\work\tools\vcpkg\installed\x64-windows\share\opencv4` | 4.12.0, ABI совпадает с `mtracking.lib` |
+| Protobuf | `C:\work\tools\vcpkg\installed\x64-windows\share\protobuf` | 33.4.0, `protobuf::libprotobuf` + `protobuf::protoc` |
 | spdlog | `C:\work\libraries\spdlog\rel\install` | `spdlog::spdlog` |
 | yaml-cpp | `C:\work\libraries\yaml\yaml-cpp_build\install` | `yaml-cpp::yaml-cpp` |
 | GTest | `C:\work\libraries\gtest\rel\install` | `GTest::gtest_main` |
 | Eigen | `C:\work\libraries\eigen-3.4.0` | header-only |
-| ZeroMQ / Protobuf / FAISS / muSSP | — | **не установлены**, подключаются на Этапах 2, 3, 5, 6 |
+| ZeroMQ / FAISS / muSSP | — | **не установлены**, подключаются на Этапах 3, 5, 6 |
 
 Следствия:
 
@@ -75,6 +76,11 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 - `mtracking/EmbeddingsCalculator.hpp` в установленных заголовках закрыт
   `#ifdef USE_OCV_EMBEDDINGS`, который потребителю не пробрасывается → Edge использует
   собственный `IReIdExtractor`.
+- MTT пересобран с `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`, `USE_OCV_EMBEDDINGS=OFF`,
+  потому что в vcpkg OpenCV 4.12 нет `opencv_tracking`, а `USE_OCV_EMBEDDINGS`
+  добавлял зависимость от `opencv_dnn` с другим inline-namespace.
+- `mdetection` собирается без CUDA/TensorRT: достаточно OpenCV DNN, он нужен только
+  для полноты экспортируемого набора MTT.
 
 ### 2.1. Проверенная сборка
 
@@ -83,8 +89,8 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | Компилятор | MSVC 19.51.36231 (Visual Studio 2026) |
 | CMake | 4.3.2, генератор `Visual Studio 18 2026` |
 | Конфигурация | `cmake --preset local-release` |
-| Результат | `trafficmcmt_core.lib`, `trafficmcmt_master.exe`, `trafficmcmt_unit_tests.exe` |
-| Тесты | `ctest --preset local-release` → 20/20 passed |
+| Результат | `trafficmcmt_core`, `trafficmcmt_proto`, `trafficmcmt_io`, `trafficmcmt_edge`, `trafficmcmt_mtt`, `trafficmcmt_master`, `trafficmcmt_mtt_export`, `trafficmcmt_tracklet_inspect` |
+| Тесты | `ctest --preset local-release` → 69/69 passed |
 | Зависимости Master | только runtime MSVC/Windows — без OpenCV, CUDA, MTT |
 
 Опции CMake по умолчанию: `MTT=ON`, `ZMQ=OFF`, `PROTOBUF=OFF`, `FAISS=OFF`,
@@ -164,7 +170,9 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | Таргет | Ключевые классы | Зависимости |
 |---|---|---|
 | `trafficmcmt_core` | `Tracklet`, `CameraCalibration`, `MasterConfig`, `Result<T>`, `Log` | spdlog, yaml-cpp |
-| `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `JsonlSink`, `SqliteTrackletStore` | protobuf, sqlite3 |
+| `trafficmcmt_proto` | сгенерированные `tracklet.pb.*`, `calibration.pb.*` | protobuf |
+| `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `TrackletNormalizer`, `InMemoryTrackletStore`, `JsonlTrackletSink`, `BinaryTrackletSink` | protobuf |
+| `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn) |
 | `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
 | `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer` | core, Eigen |
 | `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `FlowAssociator`, `GlobalIdManager` | muSSP (opt.), Eigen |
@@ -173,6 +181,9 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | `trafficmcmt_pipeline` | `MasterPipeline`, `WindowScheduler` | все выше |
 | `trafficmcmt_mtt` | `MttTrackAdapter`, `EdgeTrackExporter` | **MTTracking::mtracking**, OpenCV |
 | `trafficmcmt_metrics` | `MotMetrics`, `Evaluator` | core |
+
+Приложения Этапа 2: `trafficmcmt_mtt_export` (видео → треклеты) и
+`trafficmcmt_tracklet_inspect` (статистика и JSON-дамп треклетов).
 
 ### 6.1. Публичный контракт
 
@@ -239,6 +250,25 @@ class IMcfSolver;                          // association/IMcfSolver.h
 
 PUB/SUB — best effort. Компенсация: `sequence` + `SequenceTracker` (метрика
 `tmcmt_tracklets_missing_total`), опциональный спулинг на Edge с досылкой.
+
+### 7.4. Файловый формат (Этап 2)
+
+Один и тот же `TrackletChunk` сериализуется в три формы:
+
+| Формат | Расширение | Кодирование |
+|---|---|---|
+| JSONL | `.jsonl` | одна строка — protobuf JSON (`google::protobuf::util`), поля в `snake_case` |
+| Framed protobuf | `.bin`, `.pb` | `varint(length) + payload`; поток читается до EOF |
+| Raw protobuf | — | один `TrackletChunk` на сообщение (только API) |
+
+- `schema_version` проверяется на входе: несовместимая версия → `ErrorCode::Unsupported`.
+- `Embedding` хранится как `float` или `int8` + `scale`; квантование включается
+  `reid.quantize_embeddings` / `--quantize`, при чтении значения восстанавливаются.
+- `FileTrackletSource` определяет формат по расширению или первому байту
+  (`auto`), поддерживает `Reset()` и реплей с ускорением (`speed=0` — без паузы).
+- `TrackletNormalizer` проверяет инварианты §7.1, сортирует наблюдения, расширяет
+  `[begin, end]` до фактического диапазона, L2-нормирует эмбеддинг, ограничивает
+  `quality` и отбрасывает дубликаты по `(session, camera, local_track_id, sequence)`.
 
 ## 8. Алгоритмические решения
 
@@ -326,9 +356,9 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | 3. Топология | ✅ зафиксировано |
 | 4. Потоки данных | ✅ зафиксировано |
 | 5. Режимы | ✅ зафиксировано |
-| 6. Модули/API | 🟡 `core` реализован (Types, Tracklet, Camera, Config, Result, Log); остальные — план |
-| 7. Протокол | 📋 Этап 2 |
+| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge`, `mtt` реализованы; остальные — план |
+| 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8) |
 | 8. Алгоритмы | 📋 Этапы 3–5 |
 | 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 20 unit-тестов `core`, CI workflow; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 69 unit-тестов (включая golden-файл протокола v1), smoke `mtt_export`; CI проверяет Этап 1; деплой — Этап 9 |
 | 11. ADR | ✅ |

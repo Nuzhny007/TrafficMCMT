@@ -19,8 +19,8 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 
 | Этап | Статус |
 |---|---|
-| 1. Инфраструктура (CMake, конфиг, логи, CLI, тесты) | 🟡 в работе |
-| 2. Протокол и файловый I/O | ⬜ |
+| 1. Инфраструктура (CMake, конфиг, логи, CLI, тесты) | 🟡 в работе (CI) |
+| 2. Протокол и файловый I/O | ✅ готов |
 | 3. FAISS и ReID | ⬜ |
 | 4. st-ReID | ⬜ |
 | 5. muSSP и глобальная ассоциация | ⬜ |
@@ -30,10 +30,12 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 
 ## Требования
 
-- C++20, CMake ≥ 3.20
-- OpenCV (только для Edge-моста и BEV; Master собирается CPU-only)
+- C++20, CMake ≥ 3.21
+- OpenCV 4.12 (только для Edge-моста и BEV; Master собирается CPU-only)
+- Protobuf 3.21+ с CMake-таргетами `protobuf::libprotobuf` и `protobuf::protoc`
 - [Multitarget-tracker](https://github.com/Nuzhny007/Multitarget-tracker) установленный
-  (`MTTracking_DIR` → `<install>/lib/MTTracking/cmake`)
+  (`MTTracking_DIR` → `<install>/lib/MTTracking/cmake`), собранный против той же
+  версии OpenCV с `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`, `USE_OCV_EMBEDDINGS=OFF`
 - spdlog, yaml-cpp, GoogleTest (находятся через `find_package`, иначе — `FetchContent`)
 
 ## Сборка (Windows / MSVC)
@@ -72,15 +74,30 @@ trafficmcmt_master --version
 trafficmcmt_master --help
 ```
 
+Экспорт треклетов из видео (Этап 2):
+
+```bash
+trafficmcmt_mtt_export --video data/atrium.avi --out data/tracklets.jsonl --speed 0
+trafficmcmt_mtt_export --video data/atrium.avi --out data/tracklets.bin --quantize --speed 0
+trafficmcmt_tracklet_inspect data/tracklets.jsonl
+trafficmcmt_tracklet_inspect data/tracklets.bin --json --limit 5
+```
+
 ## Структура
 
 ```
 include/trafficmcmt/core/   доменные типы, конфиг, Result, логирование
-src/core/                   реализация core
+include/trafficmcmt/io/     codec, file source/sinks, normalizer, store
+include/trafficmcmt/edge/   ReID-экстракторы и EdgeTrackExporter
+include/trafficmcmt/mtt/    адаптер Multitarget-tracker → Observation
+proto/                      protobuf-схемы v1 (tracklet, calibration)
+src/                        реализации core/io/edge/mtt
 apps/master_node/           точка входа Master
+apps/mtt_export/            видео → треклеты
+apps/tracklet_inspect/      инспектор треклетов
 tests/unit/                 unit-тесты (GTest)
 configs/                    примеры конфигурации
-cmake/                      зависимости, warnings, package config
+cmake/                      зависимости, warnings, runtime-DLL, package config
 docs/                       архитектура и roadmap
 ```
 

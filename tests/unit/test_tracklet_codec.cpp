@@ -2,6 +2,9 @@
 
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 #include <string>
 
 #include "tracklet.pb.h"
@@ -101,6 +104,53 @@ TEST(TrackletCodec, JsonRejectsUnknownFields) {
     auto decoded = TrackletCodec::DecodeJson(corrupted);
     EXPECT_FALSE(decoded);
     EXPECT_EQ(decoded.status().code(), tmcmt::ErrorCode::ParseError);
+}
+
+TEST(TrackletCodec, DecodesGoldenV1JsonlFile) {
+    const std::filesystem::path path =
+        std::filesystem::path(TMCMT_TEST_DATA_DIR) / "tracklet_v1_golden.jsonl";
+    ASSERT_TRUE(std::filesystem::exists(path)) << path;
+
+    std::ifstream file(path);
+    ASSERT_TRUE(file.is_open()) << path;
+
+    std::string line;
+    ASSERT_TRUE(std::getline(file, line));
+    ASSERT_FALSE(line.empty());
+
+    auto decoded = TrackletCodec::DecodeJson(line);
+    ASSERT_TRUE(decoded) << decoded.status().ToString();
+    const Tracklet& tracklet = decoded.value();
+
+    EXPECT_EQ(tracklet.schema_version, 1u);
+    EXPECT_EQ(tracklet.session_id, "golden-session");
+    EXPECT_EQ(tracklet.camera, "cam-42");
+    EXPECT_EQ(tracklet.local_track_id, 99u);
+    EXPECT_EQ(tracklet.sequence, 7u);
+    EXPECT_EQ(tracklet.begin.count(), 1700000000000LL);
+    EXPECT_EQ(tracklet.end.count(), 1700000000100LL);
+    EXPECT_EQ(tracklet.type, tmcmt::ObjectType::Car);
+    EXPECT_TRUE(tracklet.is_end);
+    EXPECT_FLOAT_EQ(tracklet.quality, 0.875f);
+
+    ASSERT_EQ(tracklet.embedding.dim, 4u);
+    ASSERT_EQ(tracklet.embedding.model_id, 3u);
+    ASSERT_EQ(tracklet.embedding.values.size(), 4u);
+    for (const float value : tracklet.embedding.values) {
+        EXPECT_FLOAT_EQ(value, 0.5f);
+    }
+
+    ASSERT_EQ(tracklet.observations.size(), 2u);
+    EXPECT_EQ(tracklet.observations[0].ts.count(), 1700000000000LL);
+    EXPECT_FLOAT_EQ(tracklet.observations[0].bbox.x, 1.5f);
+    EXPECT_FLOAT_EQ(tracklet.observations[0].bbox.y, 2.5f);
+    EXPECT_FLOAT_EQ(tracklet.observations[0].bbox.w, 3.5f);
+    EXPECT_FLOAT_EQ(tracklet.observations[0].bbox.h, 4.5f);
+    EXPECT_FLOAT_EQ(tracklet.observations[0].bbox.score, 0.75f);
+    EXPECT_TRUE(tracklet.observations[0].world.valid);
+    EXPECT_FLOAT_EQ(tracklet.observations[0].world.x, 10.25f);
+    EXPECT_FLOAT_EQ(tracklet.observations[0].world.y, -20.5f);
+    EXPECT_EQ(tracklet.observations[1].ts.count(), 1700000000100LL);
 }
 
 TEST(TrackletCodec, Int8QuantizationIsLossyButClose) {

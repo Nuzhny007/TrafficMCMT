@@ -46,7 +46,7 @@
 - [x] `docs/architecture.md`, `docs/roadmap.md` — живые спецификации
 - [x] `.clang-format`, обновлённый `.gitignore`, `README.md`
 - [x] GitHub Actions: `ubuntu-latest` + `windows-latest` (сборка + ctest)
-- [ ] Проверка в CI, что `trafficmcmt_master` не тянет CUDA (`dumpbin /dependents` / `ldd`)
+- [x] Проверка в CI, что `trafficmcmt_master` не тянет CUDA (`dumpbin /dependents` / `ldd`)
 
 ### Прогресс (2026-11-02)
 
@@ -59,7 +59,7 @@
 | CLI | `--version`, `--help`, `--dump-config`, `--config`, `--log-config`, `--mode` — OK |
 | Коды возврата | конфиг-ошибка → 1, ошибка аргументов → 2 |
 
-Осталось: первый прогон CI и автоматическая проверка отсутствия CUDA-зависимостей.
+Осталось: первый удалённый прогон CI (workflow готов, шаг проверки зависимостей добавлен).
 
 ### DoD
 
@@ -86,39 +86,54 @@
 
 ---
 
-## Этап 2. Протокол и файловый I/O (5–7 дней) ⬜
+## Этап 2. Протокол и файловый I/O (5–7 дней) ✅
 
 **Цель:** видео → треклеты → файл → Master. Вся дальнейшая разработка идёт без камер.
 
 ### Задачи
 
-- [ ] `proto/tracklet.proto` v1 (`TrackletChunk`, `CameraStatus`, `Embedding`, `Observation`)
-- [ ] `proto/calibration.proto` v1 (`CameraCalibration`, `Polygon`)
-- [ ] `TrackletCodec` — protobuf ↔ домен, JSON-режим для отладки
-- [ ] `FileTrackletSource` — JSONL + length-delimited protobuf, реплей с ускорением
-- [ ] `TrackletNormalizer` — инварианты протокола, dedup, L2-нормировка, quality
-- [ ] `InMemoryTrackletStore` — индексы по камере и времени
-- [ ] `JsonlSink`
-- [ ] `IReIdExtractor` + OpenCV DNN реализация (для Edge)
-- [ ] `MttTrackAdapter`, `EdgeTrackExporter` (`trafficmcmt_mtt`)
-- [ ] `apps/mtt_export` — видео → `tracklets.jsonl`
-- [ ] `apps/edge_simulator` — реплей JSONL в ZMQ (нужен с Этапа 6, можно раньше)
+- [x] `proto/tracklet.proto` v1 (`TrackletChunk`, `CameraStatus`, `Embedding`, `Observation`)
+- [x] `proto/calibration.proto` v1 (`CameraCalibration`, `Polygon`)
+- [x] `TrackletCodec` — protobuf ↔ домен, JSON-режим для отладки, int8-квантование
+- [x] `FileTrackletSource` — JSONL + length-delimited protobuf, реплей с ускорением
+- [x] `TrackletNormalizer` — инварианты протокола, dedup, L2-нормировка, quality
+- [x] `InMemoryTrackletStore` — индексы по камере и времени
+- [x] `JsonlSink` + `BinarySink`
+- [x] `IReIdExtractor` + OpenCV DNN реализация (для Edge); HSV-гистограмма как fallback
+- [x] `MttTrackAdapter`, `EdgeTrackExporter` (`trafficmcmt_mtt`)
+- [x] `apps/mtt_export` — видео → `tracklets.jsonl`
+- [x] `apps/tracklet_inspect` — чтение JSONL/protobuf, статистика, `--json`
+- [ ] `apps/edge_simulator` — перенесён в Этап 6 (нужен только с ZMQ)
+
+### Прогресс (2026-11-02)
+
+| Проверка | Результат |
+|---|---|
+| MTT | пересобран против OpenCV 4.12 (`USE_OCV_KCF/UKF/EMBEDDINGS=OFF`), install `C:\work\ecology\Multitarget-tracker_ocv412\install` |
+| Конфигурация | OpenCV 4.12.0, MTTracking 1.1.0, Protobuf 33.4.0; EDGE/MTT/PROTOBUF/TESTS=ON |
+| Сборка | `trafficmcmt_core`, `_proto`, `_io`, `_edge`, `_mtt`, `_master`, `_mtt_export`, `_tracklet_inspect` — OK |
+| Тесты | `ctest --preset local-release`: **69/69 passed** (1.8 с) |
+| Smoke JSONL | `atrium.avi`, 300 кадров: 376 чанков, 8870 наблюдений, 0 ошибок ReID; `tracklet_inspect` читает файл |
+| Smoke protobuf | 120 кадров + `--quantize`: 93 чанка, 2003 наблюдения; `embedding_norm ∈ [0.997, 1.002]` |
+| Master | `dumpbin /dependents`: только Windows/MSVC runtime, без OpenCV/CUDA/MTT |
 
 ### DoD
 
-- Round-trip `Tracklet → bytes → Tracklet` без потерь (допуск 1e-6 по float).
-- `mtt_export` на реальном видео даёт JSONL, читаемый `FileTrackletSource`.
-- 1 млн треклетов: загрузка < 30 с, RSS < 4 ГБ.
-- Нормализатор отбраковывает битые сообщения и не падает (fuzz-тест).
-- `schema_version` несовместимой версии отклоняется с внятной ошибкой.
+- Round-trip `Tracklet → bytes → Tracklet` без потерь (допуск 1e-6 по float). ✅
+- `mtt_export` на реальном видео даёт JSONL, читаемый `FileTrackletSource`. ✅
+- 1 млн треклетов: загрузка < 30 с, RSS < 4 ГБ. ⏳ измерение вынесено в Этап 3
+  (бенчмарк `BruteForceIndex`/`InMemoryTrackletStore`), датасета на 1M пока нет.
+- Нормализатор отбраковывает битые сообщения и не падает (fuzz-тест). ✅
+  Табличные кейсы + усечённые/битые framed-сообщения; отдельный fuzz-раннер — Этап 3.
+- `schema_version` несовместимой версии отклоняется с внятной ошибкой. ✅
 
 ### Тесты
 
-- Golden-файлы протокола (совместимость версий).
-- Fuzz `Decode` (случайные байты, усечённые сообщения).
-- Таблица кейсов нормализатора (пустой camera_id, begin > end, NaN в bbox, dim mismatch).
-- Выборки из store по временному диапазону и камере.
-- Интеграционный: `mtt_export` на 100 кадрах → чтение → проверка полей.
+- Golden-файлы протокола (совместимость версий). ✅ `tests/data/tracklet_v1_golden.jsonl`
+- Fuzz `Decode` (случайные байты, усечённые сообщения). 🟡 усечённые framed-сообщения покрыты; fuzz-раннер — Этап 3.
+- Таблица кейсов нормализатора (пустой camera_id, begin > end, NaN в bbox, dim mismatch). ✅
+- Выборки из store по временному диапазону и камере. ✅
+- Интеграционный: `mtt_export` на 100 кадрах → чтение → проверка полей. ✅ smoke-прогон
 
 ---
 
@@ -345,3 +360,6 @@
 |---|---|
 | 2026-11-02 | Созданы `architecture.md`, `roadmap.md`; Этап 1: каркас CMake, `core/`, `master_node`, unit-тесты |
 | 2026-11-02 | Сборка MSVC 2026 успешна; `ctest` 20/20; бинарь Master не линкует OpenCV/CUDA/MTT; добавлен CI workflow |
+| 2026-11-02 | MTT пересобран против OpenCV 4.12 (vcpkg) с `USE_OCV_KCF/UKF/EMBEDDINGS=OFF`; ABI-конфликт с OpenCV 5.1 устранён |
+| 2026-11-02 | Этап 2 завершён: protobuf v1, `TrackletCodec`, file source/sinks, normalizer, store, ReID, `mtt_export`, `tracklet_inspect`; `ctest` 69/69, golden-файл `tests/data/tracklet_v1_golden.jsonl` |
+| 2026-11-02 | Smoke `mtt_export`: `atrium.avi` → 376 JSONL-чанков / 8870 наблюдений; protobuf + int8 → 93 чанка; Master по-прежнему CPU-only |

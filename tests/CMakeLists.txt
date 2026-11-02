@@ -21,6 +21,10 @@ target_link_libraries(trafficmcmt_unit_tests
 if(TARGET trafficmcmt_io)
     target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_io)
     tmcmt_copy_runtime_dependencies(trafficmcmt_unit_tests)
+
+    # Golden protocol files live next to the tests, not next to the binary.
+    target_compile_definitions(trafficmcmt_unit_tests
+        PRIVATE TMCMT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
 endif()
 
 tmcmt_set_warnings(trafficmcmt_unit_tests)
