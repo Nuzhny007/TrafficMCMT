@@ -109,11 +109,11 @@
 
 | Проверка | Результат |
 |---|---|
-| MTT | пересобран против OpenCV 4.12 (`USE_OCV_KCF/UKF/EMBEDDINGS=OFF`), install `C:\work\ecology\Multitarget-tracker_ocv412\install` |
-| Конфигурация | OpenCV 4.12.0, MTTracking 1.1.0, Protobuf 33.4.0; EDGE/MTT/PROTOBUF/TESTS=ON |
+| MTT | локальный клон master в `C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker`, собран MSVC 14.51.36231 (VS 2026) против OpenCV 4.12; install `...\Multitarget-tracker\install` |
+| Конфигурация | OpenCV 4.12.0, MTTracking 1.1.0 (master, API `BaseTracker`), Protobuf 33.4.0; EDGE/MTT/PROTOBUF/TESTS=ON |
 | Сборка | `trafficmcmt_core`, `_proto`, `_io`, `_edge`, `_mtt`, `_master`, `_mtt_export`, `_tracklet_inspect` — OK |
 | Тесты | `ctest --preset local-release`: **69/69 passed** (1.8 с) |
-| Smoke JSONL | `atrium.avi`, 300 кадров: 376 чанков, 8870 наблюдений, 0 ошибок ReID; `tracklet_inspect` читает файл |
+| Smoke JSONL | `atrium.avi`, 300 кадров: 376 чанков, 8870 наблюдений, 0 ошибок ReID; результат совпал с прежней сборкой MTT |
 | Smoke protobuf | 120 кадров + `--quantize`: 93 чанка, 2003 наблюдения; `embedding_norm ∈ [0.997, 1.002]` |
 | Master | `dumpbin /dependents`: только Windows/MSVC runtime, без OpenCV/CUDA/MTT |
 
@@ -363,3 +363,4 @@
 | 2026-11-02 | MTT пересобран против OpenCV 4.12 (vcpkg) с `USE_OCV_KCF/UKF/EMBEDDINGS=OFF`; ABI-конфликт с OpenCV 5.1 устранён |
 | 2026-11-02 | Этап 2 завершён: protobuf v1, `TrackletCodec`, file source/sinks, normalizer, store, ReID, `mtt_export`, `tracklet_inspect`; `ctest` 69/69, golden-файл `tests/data/tracklet_v1_golden.jsonl` |
 | 2026-11-02 | Smoke `mtt_export`: `atrium.avi` → 376 JSONL-чанков / 8870 наблюдений; protobuf + int8 → 93 чанка; Master по-прежнему CPU-only |
+| 2026-11-02 | MTT склонирован в `C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker` и собран MSVC 14.51.36231 (VS 2026); `mtt_export` адаптирован к API `BaseTracker` (`CreateTracker(settings, fps)`, `UpdateMat(..., time_point_t)`); 69/69, smoke 300 кадров дал те же 376 чанков / 8870 наблюдений |

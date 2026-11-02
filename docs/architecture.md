@@ -57,7 +57,8 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 
 | Компонент | Расположение | Версия / примечание |
 |---|---|---|
-| Multitarget-tracker (install) | `C:\work\ecology\Multitarget-tracker_ocv412\install` | 1.1.0, собран против OpenCV 4.12 |
+| Multitarget-tracker (исходники) | `C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker` | master, локальный клон — можно править |
+| Multitarget-tracker (install) | `...\Multitarget-tracker\install` | 1.1.0, MSVC 14.51.36231 (VS 2026), OpenCV 4.12 |
 | CMake-конфиг MTT | `...\install\lib\MTTracking\cmake` | `MTTracking_DIR` |
 | CMake-таргеты MTT | `MTTracking::mtracking`, `MTTracking::mdetection`, `MTTracking::inih` | `mtracking` → только `inih`; `mdetection` → OpenCV DNN |
 | Include MTT | `MTTracking_INCLUDE_DIR` | интерфейсных include-путей у таргетов нет |
@@ -76,9 +77,13 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 - `mtracking/EmbeddingsCalculator.hpp` в установленных заголовках закрыт
   `#ifdef USE_OCV_EMBEDDINGS`, который потребителю не пробрасывается → Edge использует
   собственный `IReIdExtractor`.
-- MTT пересобран с `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`, `USE_OCV_EMBEDDINGS=OFF`,
-  потому что в vcpkg OpenCV 4.12 нет `opencv_tracking`, а `USE_OCV_EMBEDDINGS`
-  добавлял зависимость от `opencv_dnn` с другим inline-namespace.
+- MTT пересобран из локального клона master тем же компилятором, что и TrafficMCMT
+  (`MSVC 14.51.36231`, VS 2026), с `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`,
+  `USE_OCV_EMBEDDINGS=OFF`, потому что в vcpkg OpenCV 4.12 нет `opencv_tracking`,
+  а `USE_OCV_EMBEDDINGS` добавлял зависимость от `opencv_dnn` с другим inline-namespace.
+- В актуальном master MTT класс `CTracker` заменён на `BaseTracker`
+  (`mtracking/BaseTracker.h`), `CreateTracker(settings, fps)` принимает fps, а
+  `UpdateMat` — `time_point_t` вместо fps. Экспортёр использует новый API.
 - `mdetection` собирается без CUDA/TensorRT: достаточно OpenCV DNN, он нужен только
   для полноты экспортируемого набора MTT.
 

@@ -18,7 +18,7 @@
 #include <opencv2/video/background_segm.hpp>
 #include <opencv2/videoio.hpp>
 
-#include "mtracking/Ctracker.h"
+#include "mtracking/BaseTracker.h"
 #include "mtracking/defines.h"
 #include "mtracking/trajectory.h"
 
@@ -336,10 +336,11 @@ int main(int argc, char** argv) {
     settings.m_matchType = tracking::MatchHungrian;
     settings.m_dt = static_cast<float>(1.0 / fps);
     settings.m_distThres = 0.95f;
-    settings.m_maximumAllowedSkippedFrames = static_cast<std::size_t>(std::lround(2.0 * fps));
-    settings.m_maxTraceLength = static_cast<std::size_t>(std::lround(4.0 * fps));
+    // Current Multitarget-tracker measures these in seconds, not frames.
+    settings.m_maximumAllowedLostTime = 2.0;
+    settings.m_maxTraceLength = 4.0;
 
-    std::unique_ptr<BaseTracker> tracker = BaseTracker::CreateTracker(settings);
+    std::unique_ptr<BaseTracker> tracker = BaseTracker::CreateTracker(settings, static_cast<float>(fps));
     if (!tracker) {
         std::cerr << "error: cannot create Multitarget-tracker instance\n";
         return kExitRuntimeError;
@@ -361,8 +362,7 @@ int main(int argc, char** argv) {
     exportConfig.model_id = reidOptions.model_id;
     tmcmt::EdgeTrackExporter exporter(exportConfig);
 
-    const auto startEpoch =
-        std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::system_clock::now().time_since_epoch());
+    const auto startTime = std::chrono::system_clock::now();
 
     const cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));
     cv::Mat frame;
@@ -418,10 +418,11 @@ int main(int argc, char** argv) {
             regions.emplace_back(rect);
         }
 
-        tracker->UpdateMat(regions, frame, static_cast<float>(fps));
-
         const auto frameOffsetMs = static_cast<std::int64_t>(std::llround(static_cast<double>(frames) * 1000.0 / fps));
-        const tmcmt::Timestamp now = startEpoch + std::chrono::milliseconds(frameOffsetMs);
+        const auto nowPoint = startTime + std::chrono::milliseconds(frameOffsetMs);
+        const tmcmt::Timestamp now = std::chrono::duration_cast<std::chrono::milliseconds>(nowPoint.time_since_epoch());
+
+        tracker->UpdateMat(regions, frame, nowPoint);
 
         const std::vector<TrackingObject> tracks = tracker->GetTracksCopy();
         for (const TrackingObject& track : tracks) {

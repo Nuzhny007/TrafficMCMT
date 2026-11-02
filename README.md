@@ -34,9 +34,25 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 - OpenCV 4.12 (только для Edge-моста и BEV; Master собирается CPU-only)
 - Protobuf 3.21+ с CMake-таргетами `protobuf::libprotobuf` и `protobuf::protoc`
 - [Multitarget-tracker](https://github.com/Nuzhny007/Multitarget-tracker) установленный
-  (`MTTracking_DIR` → `<install>/lib/MTTracking/cmake`), собранный против той же
-  версии OpenCV с `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`, `USE_OCV_EMBEDDINGS=OFF`
+  (`MTTracking_DIR` → `<install>/lib/MTTracking/cmake`), собранный **тем же компилятором**,
+  что и TrafficMCMT, против той же версии OpenCV, с
+  `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`, `USE_OCV_EMBEDDINGS=OFF`
 - spdlog, yaml-cpp, GoogleTest (находятся через `find_package`, иначе — `FetchContent`)
+
+Локальная сборка MTT (путь по умолчанию для `CMakeUserPresets.json`):
+
+```powershell
+git clone https://github.com/Nuzhny007/Multitarget-tracker.git C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker
+cmake -S C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker `
+      -B C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker\build `
+      -G "Visual Studio 18 2026" -A x64 `
+      -DCMAKE_INSTALL_PREFIX=C:/work/home/mtracker/TrafficMCMT/Multitarget-tracker/install `
+      -DOpenCV_DIR=C:/work/tools/vcpkg/installed/x64-windows/share/opencv4 `
+      -DCMAKE_PREFIX_PATH=C:/work/tools/vcpkg/installed/x64-windows `
+      -DBUILD_EXAMPLES=OFF -DUSE_OCV_KCF=OFF -DUSE_OCV_UKF=OFF -DUSE_OCV_EMBEDDINGS=OFF
+cmake --build C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker\build --config Release --parallel 4
+cmake --install C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker\build --config Release
+```
 
 ## Сборка (Windows / MSVC)
 
