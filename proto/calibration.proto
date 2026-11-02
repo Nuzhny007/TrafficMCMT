@@ -1,0 +1,34 @@
+// TrafficMCMT camera calibration protocol, version 1.
+//
+// Calibration is exchanged separately from tracklets because it changes
+// rarely (at startup or after a camera move) and is shared by all consumers.
+
+syntax = "proto3";
+
+package tmcmt.v1;
+
+option cc_enable_arenas = true;
+
+// Flat [x0, y0, x1, y1, ...] polygon in image coordinates.
+message Polygon {
+    repeated float xy = 1 [packed = true];
+}
+
+message CameraCalibration {
+    uint32 schema_version = 1;
+    string camera_id = 2;
+
+    // Row-major 3x3 homography, image plane -> ground plane (metres).
+    bool has_homography = 3;
+    repeated double homography = 4 [packed = true];
+
+    Polygon entry_zone = 5;
+    Polygon exit_zone = 6;
+
+    float meters_per_pixel_at_ground = 7;
+
+    // Coordinate frame of the world points, e.g. "map".
+    string frame_id = 8;
+
+    int64 updated_at_ms = 9;
+}

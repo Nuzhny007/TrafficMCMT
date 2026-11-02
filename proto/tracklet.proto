@@ -1,0 +1,147 @@
+// TrafficMCMT wire protocol, version 1.
+//
+// This file is the single source of truth for the Edge -> Master exchange
+// format. See docs/architecture.md, section 7, for the invariants that are not
+// expressible in proto3 (non-empty ids, sorted observations, L2-normalised
+// embeddings, monotonic sequence numbers).
+//
+// Compatibility rules:
+//   * field numbers are never reused;
+//   * removed fields are reserved;
+//   * a reader accepts schema_version == 1 only and rejects newer versions
+//     with a descriptive error instead of silently dropping data.
+
+syntax = "proto3";
+
+package tmcmt.v1;
+
+option cc_enable_arenas = true;
+
+// ---------------------------------------------------------------------------
+// Enumerations
+// ---------------------------------------------------------------------------
+
+enum ObjectType {
+    OBJECT_TYPE_UNKNOWN = 0;
+    OBJECT_TYPE_PEDESTRIAN = 1;
+    OBJECT_TYPE_CAR = 2;
+    OBJECT_TYPE_TRUCK = 3;
+    OBJECT_TYPE_BUS = 4;
+    OBJECT_TYPE_BIKE = 5;
+}
+
+// Distinguishes periodic chunks from the final chunk of a track.
+enum MessageKind {
+    MESSAGE_KIND_UNSPECIFIED = 0;
+    MESSAGE_KIND_TRACKLET = 1;
+    MESSAGE_KIND_TRACK_END = 2;
+}
+
+enum CameraState {
+    CAMERA_STATE_UNKNOWN = 0;
+    CAMERA_STATE_ONLINE = 1;
+    CAMERA_STATE_DEGRADED = 2;
+    CAMERA_STATE_OFFLINE = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Geometry and observations
+// ---------------------------------------------------------------------------
+
+message BBox {
+    float x = 1;
+    float y = 2;
+    float w = 3;
+    float h = 4;
+    float score = 5;
+}
+
+message WorldPoint {
+    float x = 1;
+    float y = 2;
+    bool valid = 3;
+}
+
+message Observation {
+    // Milliseconds since Unix epoch (UTC).
+    int64 timestamp_ms = 1;
+    BBox bbox = 2;
+    WorldPoint world = 3;
+}
+
+// ---------------------------------------------------------------------------
+// Appearance descriptor
+// ---------------------------------------------------------------------------
+
+message Embedding {
+    enum Encoding {
+        ENCODING_FLOAT32 = 0;
+        // values are not used; the int8 payload is stored in `quantized`.
+        ENCODING_INT8 = 1;
+    }
+
+    Encoding encoding = 1;
+    uint32 dim = 2;
+    // Identifies the ReID model that produced the descriptor. Embeddings with
+    // different model_id values must never be compared directly.
+    uint32 model_id = 3;
+
+    // Float32 payload, length == dim.
+    repeated float values = 4 [packed = true];
+
+    // Int8 payload, length == dim. Dequantise as value = q * scale.
+    bytes quantized = 5;
+    float scale = 6;
+}
+
+// ---------------------------------------------------------------------------
+// Edge -> Master messages
+// ---------------------------------------------------------------------------
+
+message TrackletChunk {
+    // Protocol version. Readers accept 1 only.
+    uint32 schema_version = 1;
+
+    // UUID of the Edge process run. Together with camera_id and
+    // local_track_id it identifies a track unambiguously across restarts.
+    string session_id = 2;
+
+    // Stable camera identifier.
+    string camera_id = 3;
+
+    // Local tracker id, unique within (session_id, camera_id).
+    uint64 local_track_id = 4;
+
+    // Monotonically increasing per (session_id, camera_id).
+    uint64 sequence = 5;
+
+    // UTC milliseconds, begin_ms <= end_ms.
+    int64 begin_ms = 6;
+    int64 end_ms = 7;
+
+    // At least one observation, sorted by timestamp_ms.
+    repeated Observation observations = 8;
+
+    Embedding embedding = 9;
+    ObjectType type = 10;
+
+    // [0, 1], higher is better. Optional quality hint from the Edge node.
+    float quality = 11;
+
+    MessageKind kind = 12;
+}
+
+message CameraStatus {
+    uint32 schema_version = 1;
+    string session_id = 2;
+    string camera_id = 3;
+    CameraState state = 4;
+    int64 timestamp_ms = 5;
+
+    // Estimated offset between the Edge clock and the Master clock.
+    double clock_offset_ms = 6;
+
+    uint64 frames_processed = 7;
+    uint64 tracklets_sent = 8;
+    string message = 9;
+}

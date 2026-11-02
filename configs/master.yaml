@@ -1,0 +1,85 @@
+# TrafficMCMT master node configuration.
+# Every key is optional; the values below are the defaults.
+# Unknown keys are ignored to keep forward compatibility.
+
+master:
+  # offline | online
+  mode: offline
+  window_ms: 30000
+  window_overlap_ms: 10000
+  commit_lag_ms: 15000
+
+ingest:
+  # file | zmq
+  source: file
+  max_lateness_ms: 2000
+  # Reject protocol violations instead of repairing them.
+  strict: true
+  file:
+    path: data/tracklets.jsonl
+    # 1.0 = real time, 0 = replay as fast as possible
+    speed: 1.0
+    # auto | jsonl | protobuf
+    format: auto
+  zmq:
+    endpoint: tcp://0.0.0.0:5556
+    subscribe_prefix: tmcmt.v1.
+    rcv_hwm: 5000
+    reconnect_ivl_ms: 1000
+
+reid:
+  embedding_dim: 512
+  # brute | faiss_flat | faiss_ivf_pq | faiss_hnsw
+  index: brute
+  nlist: 4096
+  nprobe: 32
+  top_k: 20
+  whitening: ""
+  # Store embeddings as int8 in the binary protocol (lossy, ~4x smaller).
+  quantize_embeddings: false
+
+st:
+  min_transition_ms: 0
+  max_transition_ms: 120000
+  weights:
+    appearance: 1.0
+    temporal: 0.5
+    spatial: 0.3
+  gate:
+    # off | zone | bev
+    mode: off
+    max_speed_mps: 30.0
+    max_distance_m: 200.0
+
+flow:
+  # mussp | ssp | greedy
+  solver: ssp
+  max_candidates_per_node: 15
+  max_component_nodes: 20000
+
+storage:
+  # memory | sqlite
+  backend: memory
+  path: data/trafficmcmt.db
+  retention_days: 7
+
+output:
+  sinks: [jsonl]
+  jsonl:
+    path: data/global_tracks.jsonl
+  binary:
+    path: data/global_tracks.bin
+    quantize_embeddings: false
+  zmq:
+    endpoint: tcp://0.0.0.0:5557
+
+metrics:
+  enabled: false
+  http_port: 9100
+
+log:
+  level: info
+  file: logs/trafficmcmt.log
+  console: true
+  max_size_bytes: 10485760
+  max_files: 5

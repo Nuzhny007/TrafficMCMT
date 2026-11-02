@@ -1,0 +1,40 @@
+{
+  "name": "trafficmcmt",
+  "version": "0.1.0",
+  "description": "Multi-camera multi-target tracking master node (late fusion)",
+  "homepage": "https://github.com/Nuzhny007/TrafficMCMT",
+  "dependencies": [
+    "spdlog",
+    "yaml-cpp",
+    {
+      "name": "gtest",
+      "host": false
+    }
+  ],
+  "features": {
+    "protocol": {
+      "description": "Protobuf tracklet protocol (stage 2)",
+      "dependencies": [
+        "protobuf"
+      ]
+    },
+    "transport": {
+      "description": "ZeroMQ transport (stage 6)",
+      "dependencies": [
+        "cppzmq"
+      ]
+    },
+    "storage": {
+      "description": "SQLite tracklet storage (stage 2)",
+      "dependencies": [
+        "sqlite3"
+      ]
+    },
+    "faiss": {
+      "description": "FAISS vector index (stage 3)",
+      "dependencies": [
+        "faiss"
+      ]
+    }
+  }
+}

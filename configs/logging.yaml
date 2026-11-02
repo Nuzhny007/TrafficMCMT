@@ -1,0 +1,8 @@
+# Standalone logging configuration (used with --log-config).
+# A `log:` section in master.yaml overrides this file's values.
+
+level: info          # trace | debug | info | warn | error | critical | off
+file: logs/trafficmcmt.log
+console: true
+max_size_bytes: 10485760
+max_files: 5

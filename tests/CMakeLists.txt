@@ -1,0 +1,49 @@
+set(TMCMT_TEST_SOURCES
+    unit/test_config.cpp
+    unit/test_result.cpp)
+
+if(TARGET trafficmcmt_io)
+    list(APPEND TMCMT_TEST_SOURCES
+        unit/test_tracklet_id.cpp
+        unit/test_tracklet_codec.cpp
+        unit/test_tracklet_normalizer.cpp
+        unit/test_tracklet_store.cpp
+        unit/test_file_source.cpp)
+endif()
+
+add_executable(trafficmcmt_unit_tests ${TMCMT_TEST_SOURCES})
+
+target_link_libraries(trafficmcmt_unit_tests
+    PRIVATE
+        trafficmcmt_core
+        GTest::gtest_main)
+
+if(TARGET trafficmcmt_io)
+    target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_io)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_unit_tests)
+endif()
+
+tmcmt_set_warnings(trafficmcmt_unit_tests)
+
+include(GoogleTest)
+gtest_discover_tests(trafficmcmt_unit_tests
+    DISCOVERY_MODE PRE_TEST
+    DISCOVERY_TIMEOUT 30)
+
+if(TARGET trafficmcmt_edge)
+    add_executable(trafficmcmt_edge_tests
+        unit/test_edge_exporter.cpp
+        unit/test_reid.cpp)
+
+    target_link_libraries(trafficmcmt_edge_tests
+        PRIVATE
+            trafficmcmt_edge
+            GTest::gtest_main)
+
+    tmcmt_set_warnings(trafficmcmt_edge_tests)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_edge_tests)
+
+    gtest_discover_tests(trafficmcmt_edge_tests
+        DISCOVERY_MODE PRE_TEST
+        DISCOVERY_TIMEOUT 30)
+endif()
