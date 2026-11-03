@@ -108,7 +108,9 @@ if(TRAFFICMCMT_WITH_EDGE AND OpenCV_FOUND)
     add_library(trafficmcmt_edge STATIC
         src/edge/ColorHistogramReIdExtractor.cpp
         src/edge/DnnReIdExtractor.cpp
-        src/edge/EdgeTrackExporter.cpp)
+        src/edge/EdgeTrackExporter.cpp
+        src/edge/GeoBinding.cpp
+        src/edge/TypeAwareReIdExtractor.cpp)
     add_library(TrafficMCMT::edge ALIAS trafficmcmt_edge)
 
     target_include_directories(trafficmcmt_edge PUBLIC ${OpenCV_INCLUDE_DIRS})
@@ -160,7 +162,8 @@ if(TARGET trafficmcmt_mtt AND TARGET trafficmcmt_io)
     target_link_libraries(trafficmcmt_mtt_export
         PRIVATE
             trafficmcmt_mtt
-            trafficmcmt_io)
+            trafficmcmt_io
+            MTTracking::mdetection)
     tmcmt_set_warnings(trafficmcmt_mtt_export)
     tmcmt_copy_runtime_dependencies(trafficmcmt_mtt_export)
 endif()

@@ -37,7 +37,9 @@ gtest_discover_tests(trafficmcmt_unit_tests
 if(TARGET trafficmcmt_edge)
     add_executable(trafficmcmt_edge_tests
         unit/test_edge_exporter.cpp
-        unit/test_reid.cpp)
+        unit/test_geo_binding.cpp
+        unit/test_reid.cpp
+        unit/test_type_aware_reid.cpp)
 
     target_link_libraries(trafficmcmt_edge_tests
         PRIVATE

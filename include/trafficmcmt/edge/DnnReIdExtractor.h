@@ -17,6 +17,8 @@ struct DnnReIdOptions {
     cv::Size input_size{128, 256};
     std::uint32_t model_id = 2;
     cv::Scalar mean{0.0, 0.0, 0.0};
+    /// Per-channel standard deviation applied after `scale` and channel swap.
+    cv::Scalar stddev{1.0, 1.0, 1.0};
     double scale = 1.0 / 255.0;
     bool swap_rb = true;
     int min_roi_size = 8;

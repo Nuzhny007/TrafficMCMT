@@ -1,8 +1,8 @@
 # TrafficMCMT — архитектура
 
 > **Статус документа:** живая спецификация. Обновляется вместе с кодом.
-> **Версия:** 0.2 (Этап 2)
-> **Дата:** 2026-11-02
+> **Версия:** 0.3 (Этап 2 + тестовый пример на реальных видео)
+> **Дата:** 2026-11-03
 
 ## 1. Назначение и границы
 
@@ -21,10 +21,12 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 
 | Функция | Компонент |
 |---|---|
-| Детекция объектов | `mdetection::BaseDetector` (YOLO / TensorRT / BGFG) |
+| Детекция объектов | `mdetection::BaseDetector` (YOLO / D-FINE / TensorRT / BGFG) |
+| Настройки детектора | `TrackerSettings` из `configs/detectors/*.ini` (`[detection]`, `[tracking]`) |
 | Локальный MOT | `mtracking::BaseTracker` (Kalman + Hungarian) |
 | Локальный `track_id` | `TrackingObject::m_ID` |
-| Извлечение ReID-эмбеддинга | `tmcmt::IReIdExtractor` (обвязка Edge, не MTT) |
+| Геопривязка кадра | `tmcmt::GeoBinding` (`geo_bind.ini` → ENU, метры) |
+| Извлечение ReID-эмбеддинга | `tmcmt::TypeAwareReIdExtractor` / `IReIdExtractor` |
 | Формирование треклетов | `tmcmt::EdgeTrackExporter` |
 | Публикация в сеть | `tmcmt::ZmqTrackletPublisher` |
 
@@ -86,6 +88,13 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
   `UpdateMat` — `time_point_t` вместо fps. Экспортёр использует новый API.
 - `mdetection` собирается без CUDA/TensorRT: достаточно OpenCV DNN, он нужен только
   для полноты экспортируемого набора MTT.
+- `trafficmcmt_mtt_export` — единственное приложение, которое линкует
+  `MTTracking::mdetection`; `trafficmcmt_mtt` и Master остаются без него.
+- Детектор создаётся через `BaseDetector::CreateDetector` с `config_t` из
+  `configs/detectors/*.ini`; поддерживаются `YOLOV8`, `YOLO11`, `DFINE` на COCO.
+  Лишние классы отключаются `white_list` (в MTT это `;`-список типов).
+- Геопривязка реализована в `trafficmcmt_edge` (`GeoBinding`) и не зависит от
+  примеров MTT; формулы WGS84→ENU совпадают с `LocalPlane` из MTT.
 
 ### 2.1. Проверенная сборка
 
@@ -95,7 +104,7 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | CMake | 4.3.2, генератор `Visual Studio 18 2026` |
 | Конфигурация | `cmake --preset local-release` |
 | Результат | `trafficmcmt_core`, `trafficmcmt_proto`, `trafficmcmt_io`, `trafficmcmt_edge`, `trafficmcmt_mtt`, `trafficmcmt_master`, `trafficmcmt_mtt_export`, `trafficmcmt_tracklet_inspect` |
-| Тесты | `ctest --preset local-release` → 69/69 passed |
+| Тесты | `ctest --preset local-release` → 84/84 passed |
 | Зависимости Master | только runtime MSVC/Windows — без OpenCV, CUDA, MTT |
 
 Опции CMake по умолчанию: `MTT=ON`, `ZMQ=OFF`, `PROTOBUF=OFF`, `FAISS=OFF`,
@@ -177,18 +186,19 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | `trafficmcmt_core` | `Tracklet`, `CameraCalibration`, `MasterConfig`, `Result<T>`, `Log` | spdlog, yaml-cpp |
 | `trafficmcmt_proto` | сгенерированные `tracklet.pb.*`, `calibration.pb.*` | protobuf |
 | `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `TrackletNormalizer`, `InMemoryTrackletStore`, `JsonlTrackletSink`, `BinaryTrackletSink` | protobuf |
-| `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn) |
+| `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `TypeAwareReIdExtractor`, `GeoBinding`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn, calib3d) |
 | `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
 | `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer` | core, Eigen |
 | `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `FlowAssociator`, `GlobalIdManager` | muSSP (opt.), Eigen |
 | `trafficmcmt_bev` | `HomographyProjector`, `WorldTrajectoryFusion` | OpenCV core, Eigen |
 | `trafficmcmt_net` | `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink` | libzmq/cppzmq, protobuf |
 | `trafficmcmt_pipeline` | `MasterPipeline`, `WindowScheduler` | все выше |
-| `trafficmcmt_mtt` | `MttTrackAdapter`, `EdgeTrackExporter` | **MTTracking::mtracking**, OpenCV |
+| `trafficmcmt_mtt` | `MttTrackAdapter` | **MTTracking::mtracking**, OpenCV |
 | `trafficmcmt_metrics` | `MotMetrics`, `Evaluator` | core |
 
-Приложения Этапа 2: `trafficmcmt_mtt_export` (видео → треклеты) и
-`trafficmcmt_tracklet_inspect` (статистика и JSON-дамп треклетов).
+Приложения Этапа 2: `trafficmcmt_mtt_export` (видео → треклеты; единственный таргет,
+линкующий `MTTracking::mdetection`) и `trafficmcmt_tracklet_inspect` (статистика и
+JSON-дамп треклетов).
 
 ### 6.1. Публичный контракт
 
@@ -275,6 +285,60 @@ PUB/SUB — best effort. Компенсация: `sequence` + `SequenceTracker` 
   `[begin, end]` до фактического диапазона, L2-нормирует эмбеддинг, ограничивает
   `quality` и отбрасывает дубликаты по `(session, camera, local_track_id, sequence)`.
 
+### 7.5. Мировые координаты и временная база Edge
+
+**Геопривязка.** `GeoBinding` читает секцию `[points]` из формата
+Multitarget-tracker `geo_bind.ini`:
+
+```ini
+[points]
+lat0 = 45.52724575
+lon0 = 5.97433625
+px_x0 = 0.1234      ; нормализованный пиксель x / width
+px_y0 = 0.5678      ; нормализованный пиксель y / height
+```
+
+- Пиксели нормализованы в `[0, 1]`, поэтому привязка не зависит от разрешения.
+- WGS84 → локальная плоскость East-North-Up (метры) по формулам эллипсоида
+  (эквивалент `LocalPlane` в MTT). По умолчанию начало координат — среднее
+  широт/долгот контрольных точек.
+- Для нескольких камер начало координат **должно совпадать**, иначе их мировые
+  координаты сдвинуты друг относительно друга. Общий origin задаётся
+  `--geo-origin lat,lon` (или ключами `origin_lat`/`origin_lon` в `[points]`).
+- Гомография «нормализованный пиксель → ENU» оценивается `findHomography`
+  (≥ 4 точек). Обратная матрица используется для `ToNormalizedPixel`.
+- RMS-ошибка проверяется в метрах (`max_rms_error_m`, по умолчанию 10 м) и в
+  нормализованных пикселях (`max_rms_error_px`, по умолчанию 0.02).
+- В `mtt_export` нижняя центральная точка bbox проецируется в метры и попадает
+  в `Observation.world`; та же точка передаётся в `CRegion::SetLocalCartesian`,
+  чтобы локальный трекер мог матчить по `DistLocalCartesian` (порог `--local-dist`, м).
+
+**Временная база.** `TrackingObject` не хранит timestamp, поэтому экспортёр
+вычисляет его сам:
+
+```
+timestamp_ms = start_epoch_ms + round((start_frame + frame_index) * 1000 / fps)
+```
+
+- `--start-epoch-ms` задаёт абсолютное время первого кадра; для нескольких камер
+  он должен быть одинаковым, иначе межкамерные `Δt` бессмысленны.
+- `--start-frame` позволяет начать с середины видео, сохраняя корректное время.
+- `session_id` по умолчанию `edge-<start_epoch_ms>`, `camera_id` — `--camera`.
+- Все наблюдения и чанки используют `std::chrono::milliseconds` UTC.
+
+**ReID по типу объекта.** `TypeAwareReIdExtractor` выбирает модель по
+`ObjectType` и возвращает разные `model_id`:
+
+| Тип | Модель | `model_id` по умолчанию |
+|---|---|---|
+| `Pedestrian` | OSNet/ONNX, иначе HSV | 2 |
+| `Car` / `Truck` / `Bus` / `Bike` | ONNX, иначе HSV | 3 |
+| `Unknown` | HSV | 1 |
+
+Разные `model_id` не дают Master смешивать несравнимые дескрипторы. DNN-ветка
+использует ImageNet mean/std (`0.485/0.456/0.406`, `0.229/0.224/0.225`) и
+`swapRB`, вход по умолчанию `128x256`.
+
 ## 8. Алгоритмические решения
 
 ### 8.1. Стоимость связи треклетов
@@ -339,6 +403,8 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | ADR-004 | `SspSolver` до muSSP | разблокирует Этап 5, даёт эталон оптимальности | ждать сборку muSSP |
 | ADR-005 | ZMQ PUB/SUB + `sequence` | простота, фильтрация по топику; потери детектируются | gRPC streaming |
 | ADR-006 | Скользящее окно + `commit_lag` | компромисс latency/качество, стабильные ID | полный offline, чистый online-greedy |
+| ADR-007 | Геопривязка в `trafficmcmt_edge`, не в Master | Edge знает калибровку и кадры; Master получает готовые метры | проекция в Master по `CameraCalibration` |
+| ADR-008 | ReID по типу объекта с отдельными `model_id` | пешеходы и транспорт требуют разных моделей; `model_id` защищает от смешивания | единая модель для всех типов |
 
 ## 12. Глоссарий
 
@@ -361,9 +427,9 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | 3. Топология | ✅ зафиксировано |
 | 4. Потоки данных | ✅ зафиксировано |
 | 5. Режимы | ✅ зафиксировано |
-| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge`, `mtt` реализованы; остальные — план |
-| 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8) |
-| 8. Алгоритмы | 📋 Этапы 3–5 |
+| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `mtt` реализованы; остальные — план |
+| 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу |
+| 8. Алгоритмы | 🟡 `GeoBinding` (метры) готов; st-ReID и MCF — Этапы 3–5 |
 | 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 69 unit-тестов (включая golden-файл протокола v1), smoke `mtt_export`; CI проверяет Этап 1; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 84 unit-теста (протокол, geo, type-aware ReID), smoke на `aire` и Auburn; деплой — Этап 9 |
 | 11. ADR | ✅ |

@@ -10,6 +10,34 @@
 #include <opencv2/imgproc.hpp>
 
 namespace tmcmt {
+namespace {
+
+/// Builds a NCHW blob and applies the optional per-channel mean/stddev.
+cv::Mat MakeBlob(const cv::Mat& image, const DnnReIdOptions& options) {
+    cv::Mat blob = cv::dnn::blobFromImage(image, options.scale, options.input_size, cv::Scalar(), options.swap_rb,
+                                          false);
+    const bool hasMean = options.mean[0] != 0.0 || options.mean[1] != 0.0 || options.mean[2] != 0.0;
+    const bool hasStd = options.stddev[0] != 1.0 || options.stddev[1] != 1.0 || options.stddev[2] != 1.0;
+    if ((!hasMean && !hasStd) || blob.dims != 4 || blob.type() != CV_32F) {
+        return blob;
+    }
+
+    const int channels = blob.size[1];
+    const std::size_t plane = static_cast<std::size_t>(blob.size[2]) * static_cast<std::size_t>(blob.size[3]);
+    float* data = blob.ptr<float>();
+    for (int channel = 0; channel < channels; ++channel) {
+        const double mean = options.mean[std::min(channel, 3)];
+        const double stddev = options.stddev[std::min(channel, 3)];
+        const double divisor = stddev > 0.0 ? stddev : 1.0;
+        float* channelData = data + static_cast<std::size_t>(channel) * plane;
+        for (std::size_t i = 0; i < plane; ++i) {
+            channelData[i] = static_cast<float>((static_cast<double>(channelData[i]) - mean) / divisor);
+        }
+    }
+    return blob;
+}
+
+} // namespace
 
 DnnReIdExtractor::DnnReIdExtractor(DnnReIdOptions options, cv::dnn::Net net, int dim)
     : m_options(std::move(options)), m_net(std::move(net)), m_dim(dim) {}
@@ -32,8 +60,7 @@ Result<std::unique_ptr<DnnReIdExtractor>> DnnReIdExtractor::Create(DnnReIdOption
 
         // Probe the output dimension with a black image.
         const cv::Mat probe(options.input_size, CV_8UC3, cv::Scalar::all(0));
-        const cv::Mat blob =
-            cv::dnn::blobFromImage(probe, options.scale, options.input_size, options.mean, options.swap_rb, false);
+        const cv::Mat blob = MakeBlob(probe, options);
         net.setInput(blob);
         const cv::Mat output = net.forward();
         const int dim = static_cast<int>(output.total());
@@ -63,9 +90,7 @@ Result<Embedding> DnnReIdExtractor::Extract(const cv::Mat& bgr, const cv::Rect& 
         cv::Mat resized;
         cv::resize(crop, resized, m_options.input_size);
 
-        const cv::Mat blob =
-            cv::dnn::blobFromImage(resized, m_options.scale, m_options.input_size, m_options.mean, m_options.swap_rb,
-                                   false);
+        const cv::Mat blob = MakeBlob(resized, m_options);
         m_net.setInput(blob);
         const cv::Mat output = m_net.forward();
         const cv::Mat flat = output.reshape(1, 1);

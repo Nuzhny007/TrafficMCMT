@@ -1,0 +1,36 @@
+# Two-camera dataset: Auburn, Toomer's Corner.
+#
+# Both videos have 10204 frames at ~30 fps and a common geo binding origin, so
+# they can be used to validate cross-camera world coordinates and, after the
+# Master pipeline (stages 3-5) is implemented, global identity.
+#
+# `time_base_ms` is synthetic and identical for both cameras: the video file
+# names encode 2021-05-09 22:24 (UTC). Relative paths are resolved from the
+# repository root.
+
+name: auburn_toomer
+description: Synchronised two-camera recording with shared objects (black Jeep, pedestrians).
+
+time_base_ms: 1620599040000
+
+# Shared ENU origin. Every camera must use the same value, otherwise their
+# world coordinates are translated relative to each other.
+geo_origin: 32.606456,-85.481891
+
+cameras:
+  - id: cam-01
+    video: ../data/auburn_toomer/sync_videos/1_2021-05-09_22_24.mp4
+    geo_bind: ../data/auburn_toomer/sync_videos/1_2021-05-09_22_24.ini
+    output: build/datasets/auburn_toomer/cam-01.jsonl
+  - id: cam-02
+    video: ../data/auburn_toomer/sync_videos/2_2021-05-09_22_24.mp4
+    geo_bind: ../data/auburn_toomer/sync_videos/2_2021-05-09_22_24.ini
+    output: build/datasets/auburn_toomer/cam-02.jsonl
+
+combined_output: build/datasets/auburn_toomer/combined.jsonl
+
+detector_settings: ../configs/detectors/coco_yolov8s.ini
+white_list: person;bicycle;car;motorbike;bus;truck
+
+reid_person_model: ../Multitarget-tracker/data/reid/osnet_x0_25_msmt17.onnx
+reid_input: 128x256

@@ -1,15 +1,16 @@
 # TrafficMCMT — roadmap
 
 > **Статус документа:** живая спецификация. Чекбоксы обновляются по мере выполнения.
-> **Версия:** 0.1 · **Дата:** 2026-11-02
+> **Версия:** 0.2 · **Дата:** 2026-11-03
 > **Оценки:** человеко-дни для одного senior C++ разработчика.
 
 ## Сводка
 
 | # | Этап | Дней | Статус | Зависит от |
 |---|---|---|---|---|
-| 1 | Базовая инфраструктура | 3–4 | 🟡 в работе | — |
-| 2 | Протокол и файловый I/O | 5–7 | ⬜ | 1 |
+| 1 | Базовая инфраструктура | 3–4 | ✅ | — |
+| 2 | Протокол и файловый I/O | 5–7 | ✅ | 1 |
+| 2a | Тестовый пример: реальные видео | 2–3 | ✅ | 2 |
 | 3 | FAISS и базовый ReID | 7–10 | ⬜ | 2 |
 | 4 | st-ReID (Camera Link Model) | 8–12 | ⬜ | 2, 3 |
 | 5 | muSSP и глобальная ассоциация | 10–14 | ⬜ | 3, 4 |
@@ -18,14 +19,14 @@
 | 8 | BEV и мировые координаты | 8–12 | ⬜ | 4 |
 | 9 | Прод-обвязка (опция) | 5–7 | ⬜ | 6, 7 |
 
-**Итого:** 59–79 дней. Соло — 12–16 недель; два разработчика — 7–9 недель
+**Итого:** 61–82 дней. Соло — 12–16 недель; два разработчика — 7–9 недель
 (параллелятся: 3 ∥ 4, 6 ∥ 5, 8 ∥ 7).
 
 Условные обозначения: ⬜ не начат · 🟡 в работе · ✅ готов · ⛔ заблокирован.
 
 ---
 
-## Этап 1. Базовая инфраструктура (3–4 дня) 🟡
+## Этап 1. Базовая инфраструктура (3–4 дня) ✅
 
 **Цель:** собираемый каркас: CMake, конфиг, логирование, CLI, тесты, CI.
 Публичный API ещё не содержит алгоритмов, но фиксирует доменные типы.
@@ -134,6 +135,68 @@
 - Таблица кейсов нормализатора (пустой camera_id, begin > end, NaN в bbox, dim mismatch). ✅
 - Выборки из store по временному диапазону и камере. ✅
 - Интеграционный: `mtt_export` на 100 кадрах → чтение → проверка полей. ✅ smoke-прогон
+
+---
+
+## Этап 2a. Тестовый пример на реальных видео (2–3 дня) ✅
+
+**Цель:** проверить Edge-часть на реальных данных: детектор YOLO/D-FINE, геопривязка,
+ReID по типу объекта, две камеры с общей временной базой. Master pipeline (Этапы 3–5)
+ещё не реализован, поэтому глобальные ID на этом этапе не проверяются.
+
+### Задачи
+
+- [x] `GeoBinding` — парсинг `geo_bind.ini`, WGS84→ENU, гомография, `Project`/`ToNormalizedPixel`
+- [x] `TypeAwareReIdExtractor` — OSNet для пешеходов, HSV/DNN для транспорта, отдельные `model_id`
+- [x] `DnnReIdExtractor` — ImageNet mean/std, per-channel нормализация
+- [x] `apps/mtt_export`: `--geo-bind`, `--detector-settings`, `--white-list`,
+      `--reid-person-model`, `--reid-vehicle-model`, `--reid-input`, `--start-epoch-ms`,
+      `--start-frame`, `--local-dist`
+- [x] Детектор через `BaseDetector::CreateDetector` (`YOLOV8`, `YOLO11`, `DFINE`)
+- [x] `configs/detectors/coco_yolov8s.ini`, `configs/detectors/coco_dfine_s.ini`
+- [x] `configs/datasets/aire.yaml`, `configs/datasets/auburn_toomer.yaml`
+- [x] `scripts/run_aire.ps1`, `scripts/run_auburn_toomer.ps1`
+- [x] Тесты `test_geo_binding.cpp`, `test_type_aware_reid.cpp`
+- [x] Результаты пишутся в `build/datasets/...`; видео и модели вне git
+
+### Прогресс (2026-11-03)
+
+| Проверка | Результат |
+|---|---|
+| Сборка | `local-release`, MSVC 19.51 / VS 2026 — OK |
+| Тесты | `ctest --preset local-release`: **84/84 passed** |
+| `aire` (300 кадров) | 165 чанков, 4562 наблюдения, `world_valid=4562`, `reid_failures=0`; типы `car=141`, `truck=18`, `pedestrian=4`, `bus=2` |
+| Auburn cam-01 (300 кадров с 1800) | 66 чанков, 1856 наблюдений, `world_valid=1856`; `pedestrian=40`, `car=14`, `truck=10`, `bike=2` |
+| Auburn cam-02 (300 кадров с 1800) | 160 чанков, 4518 наблюдений, `world_valid=4518`; `pedestrian=40`, `car=112`, `bike=8` |
+| Общая временная база | `[1620599100008, 1620599109937]` совпадает у обеих камер |
+| Общий ENU origin | `--geo-origin 32.606456,-85.481891` для обеих камер; без него координаты сдвинуты на ~1.1 м |
+| Эмбеддинги | 512-d, L2-норма = 1 у всех чанков |
+| Межкамерные world-точки | первое 2-секундное окно: 199 совпавших timestamp, расстояние 0.53–2.80 м (медиана 1.62 м), 199/199 ≤ 5 м |
+| `combined.jsonl` | 226 треклетов, 6374 наблюдения, 2 камеры |
+
+### Команды
+
+```powershell
+cmake --build --preset local-release
+powershell -ExecutionPolicy Bypass -File scripts/run_aire.ps1 -MaxFrames 300
+powershell -ExecutionPolicy Bypass -File scripts/run_auburn_toomer.ps1 -MaxFrames 300
+```
+
+Полный прогон Auburn: `-Full` (10 204 кадра на камеру, ~340 с видео). Для двух камер
+обязателен одинаковый `--start-epoch-ms` (по умолчанию `1620599040000`).
+
+### Ограничения
+
+- Master pipeline отсутствует: проверяется только Edge-экспорт и согласованность
+  world-координат, а не глобальные ID.
+- Для двух камер обязателен общий ENU origin (`-GeoOrigin` в скрипте); иначе
+  координаты камер смещены друг относительно друга.
+- Чёрный Jeep классифицируется как `truck` на cam-01 и `car` на cam-02 — межкамерная
+  ассоциация должна учитывать `AddNearTypes(car, truck)`.
+- Наивное сравнение nearest-neighbor по всем 300 кадрам включает объекты, видимые
+  только в одной камере, поэтому метрика считается по 2-секундному окну с общими объектами.
+- Короткие окна (300 кадров) выбраны для скорости; полный прогон — отдельная задача.
+- `yolov8s.onnx` скопирован в локальный `Multitarget-tracker/data/coco`; модель в git не входит.
 
 ---
 
@@ -364,3 +427,6 @@
 | 2026-11-02 | Этап 2 завершён: protobuf v1, `TrackletCodec`, file source/sinks, normalizer, store, ReID, `mtt_export`, `tracklet_inspect`; `ctest` 69/69, golden-файл `tests/data/tracklet_v1_golden.jsonl` |
 | 2026-11-02 | Smoke `mtt_export`: `atrium.avi` → 376 JSONL-чанков / 8870 наблюдений; protobuf + int8 → 93 чанка; Master по-прежнему CPU-only |
 | 2026-11-02 | MTT склонирован в `C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker` и собран MSVC 14.51.36231 (VS 2026); `mtt_export` адаптирован к API `BaseTracker` (`CreateTracker(settings, fps)`, `UpdateMat(..., time_point_t)`); 69/69, smoke 300 кадров дал те же 376 чанков / 8870 наблюдений |
+| 2026-11-03 | Добавлены `GeoBinding` (WGS84→ENU, гомография, RMS-проверка) и `TypeAwareReIdExtractor` (OSNet для пешеходов, HSV/DNN для транспорта); `mtt_export` получил геопривязку, детектор из `configs/detectors/*.ini`, `white_list` и общую временную базу |
+| 2026-11-03 | `ctest` 84/84; `aire` 300 кадров: 165 чанков / 4562 наблюдения, `world_valid=100%`; Auburn 300 кадров с кадра 1800: cam-01 66 чанков / 1856 наблюдений, cam-02 160 чанков / 4518 наблюдений, временные диапазоны совпадают |
+| 2026-11-03 | Добавлен общий ENU origin (`--geo-origin`, `origin_lat/origin_lon`); межкамерные world-координаты Auburn в 2-секундном окне: 199 совпавших timestamp, 0.53–2.80 м (медиана 1.62 м), все ≤ 5 м; добавлены `scripts/run_aire.ps1`, `scripts/run_auburn_toomer.ps1`, манифесты датасетов |

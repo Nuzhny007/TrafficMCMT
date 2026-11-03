@@ -1,0 +1,21 @@
+# Single-camera Edge test: highway traffic with a geo binding.
+#
+# Relative paths are resolved from the repository root. The run script
+# scripts/run_aire.ps1 uses the same values.
+
+name: aire
+description: Single-camera highway clip used to validate Edge export, geometry and ReID.
+
+time_base_ms: 1620599040000
+
+camera: cam-01
+video: ../data/aire/Relaxing_highway_traffic.mp4
+geo_bind: ../data/aire/geo_bind.ini
+
+detector_settings: ../configs/detectors/coco_yolov8s.ini
+white_list: person;bicycle;car;motorbike;bus;truck
+
+reid_person_model: ../Multitarget-tracker/data/reid/osnet_x0_25_msmt17.onnx
+reid_input: 128x256
+
+output: build/datasets/aire/cam-01.jsonl
