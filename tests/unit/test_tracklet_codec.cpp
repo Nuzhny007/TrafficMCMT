@@ -30,6 +30,8 @@ void ExpectTrackletEqual(const Tracklet& actual, const Tracklet& expected) {
     EXPECT_EQ(actual.type, expected.type);
     EXPECT_EQ(actual.is_end, expected.is_end);
     EXPECT_EQ(actual.schema_version, expected.schema_version);
+    EXPECT_DOUBLE_EQ(actual.origin_latitude, expected.origin_latitude);
+    EXPECT_DOUBLE_EQ(actual.origin_longitude, expected.origin_longitude);
     EXPECT_FLOAT_EQ(actual.quality, expected.quality);
     EXPECT_EQ(actual.embedding.dim, expected.embedding.dim);
     EXPECT_EQ(actual.embedding.model_id, expected.embedding.model_id);
@@ -132,6 +134,8 @@ TEST(TrackletCodec, DecodesGoldenV1JsonlFile) {
     EXPECT_EQ(tracklet.type, tmcmt::ObjectType::Car);
     EXPECT_TRUE(tracklet.is_end);
     EXPECT_FLOAT_EQ(tracklet.quality, 0.875f);
+    // Legacy v1 files predate the origin fields; readers must default to zero.
+    EXPECT_FALSE(tracklet.HasOrigin());
 
     ASSERT_EQ(tracklet.embedding.dim, 4u);
     ASSERT_EQ(tracklet.embedding.model_id, 3u);

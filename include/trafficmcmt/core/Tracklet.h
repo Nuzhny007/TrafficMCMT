@@ -95,6 +95,16 @@ struct Tracklet {
     float quality = 1.f;
     std::uint32_t schema_version = 1;
 
+    /// Shared ENU origin (WGS-84 degrees) used for `Observation.world`.
+    /// Zero means "not provided" (legacy streams).
+    double origin_latitude = 0.0;
+    double origin_longitude = 0.0;
+
+    [[nodiscard]] bool HasOrigin() const noexcept {
+        return std::isfinite(origin_latitude) && std::isfinite(origin_longitude) &&
+               (origin_latitude != 0.0 || origin_longitude != 0.0);
+    }
+
     [[nodiscard]] std::int64_t DurationMs() const noexcept {
         return (end - begin).count();
     }

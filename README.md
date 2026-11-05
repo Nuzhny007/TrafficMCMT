@@ -21,6 +21,8 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 |---|---|
 | 1. Инфраструктура (CMake, конфиг, логи, CLI, тесты) | 🟡 в работе (CI) |
 | 2. Протокол и файловый I/O | ✅ готов |
+| 2a. Тестовый пример на реальных видео (Aire, Auburn) | ✅ готов |
+| 2b. Карта и viewer-фид (WebSocket v1) | ✅ готов |
 | 3. FAISS и ReID | ⬜ |
 | 4. st-ReID | ⬜ |
 | 5. muSSP и глобальная ассоциация | ⬜ |
@@ -99,23 +101,52 @@ trafficmcmt_tracklet_inspect data/tracklets.jsonl
 trafficmcmt_tracklet_inspect data/tracklets.bin --json --limit 5
 ```
 
+Карта и viewer-фид (Этап 2b) — треклеты → протокол v1 → WebSocket:
+
+```powershell
+# offline: кадры протокола v1 в JSONL
+.\build\local-release\Release\trafficmcmt_map_export.exe `
+  --input build\datasets\auburn_toomer\combined.jsonl `
+  --config configs\map_feed.yaml --out build\map\auburn_frames.jsonl
+
+# WebSocket-реплей для traffic-mcmt-viewer (ws://localhost:8080/ws)
+.\build\local-release\Release\trafficmcmt_map_gateway.exe `
+  --input build\datasets\auburn_toomer\combined.jsonl `
+  --config configs\map_feed.yaml --port 8080 --speed 1
+
+# smoke с реальным WebSocket-клиентом
+powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
+```
+
+`map_gateway` принимает `--speed` (0 — без pacing), `--loop`, `--exit-on-end`,
+`--duration`, `--frames-out`; `/health` отдаёт JSON со счётчиком активных треков.
+Одиночная камера Aire: `configs/map_feed_aire.yaml`.
+
 ## Структура
 
 ```
-include/trafficmcmt/core/   доменные типы, конфиг, Result, логирование
+include/trafficmcmt/core/   доменные типы, конфиг, Result, логирование, Geo (WGS84↔ENU)
 include/trafficmcmt/io/     codec, file source/sinks, normalizer, store
-include/trafficmcmt/edge/   ReID-экстракторы и EdgeTrackExporter
+include/trafficmcmt/edge/   ReID-экстракторы, EdgeTrackExporter, GeoBinding
 include/trafficmcmt/mtt/    адаптер Multitarget-tracker → Observation
+include/trafficmcmt/map/    MapFeed, MapProtocol, MapConfig, timeline, velocity, trail
+include/trafficmcmt/net/    WebSocket-сервер/клиент (RFC 6455, без зависимостей)
 proto/                      protobuf-схемы v1 (tracklet, calibration)
-src/                        реализации core/io/edge/mtt
+src/                        реализации core/io/edge/mtt/map/net
 apps/master_node/           точка входа Master
-apps/mtt_export/            видео → треклеты
+apps/mtt_export/            видео → треклеты (Edge, OpenCV + MTT)
+apps/map_export/            треклеты → JSONL-кадры протокола v1
+apps/map_gateway/           WebSocket-реплей кадров для viewer
 apps/tracklet_inspect/      инспектор треклетов
 tests/unit/                 unit-тесты (GTest)
-configs/                    примеры конфигурации
+configs/                    примеры конфигурации (включая map_feed*.yaml)
 cmake/                      зависимости, warnings, runtime-DLL, package config
 docs/                       архитектура и roadmap
+scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway
 ```
+
+Viewer (`traffic-mcmt-viewer`) — отдельный репозиторий: React + deck.gl + MapLibre,
+подключается к `map_gateway` по `ws://localhost:8080/ws`.
 
 ## Лицензия
 

@@ -14,12 +14,10 @@
 #include <opencv2/calib3d.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include "trafficmcmt/core/Geo.h"
+
 namespace tmcmt {
 namespace {
-
-constexpr double kDegToRad = 0.017453292519943295769236907684886;
-constexpr double kWgs84A = 6378137.0;
-constexpr double kWgs84F = 1.0 / 298.257223563;
 
 std::string Trim(std::string text) {
     const auto notSpace = [](unsigned char c) { return !std::isspace(c); };
@@ -105,31 +103,9 @@ cv::Point2d Apply(const cv::Matx33d& matrix, const cv::Point2d& point) {
 } // namespace
 
 cv::Point2d GeographicToEnu(double latitude, double longitude, double lat0, double lon0) {
-    const double e2 = kWgs84F * (2.0 - kWgs84F);
-    const double sinLat = std::sin(latitude * kDegToRad);
-    const double cosLat = std::cos(latitude * kDegToRad);
-    const double sinLon = std::sin(longitude * kDegToRad);
-    const double cosLon = std::cos(longitude * kDegToRad);
-    const double n = kWgs84A / std::sqrt(1.0 - e2 * sinLat * sinLat);
-    const double x = n * cosLat * cosLon;
-    const double y = n * cosLat * sinLon;
-    const double z = n * (1.0 - e2) * sinLat;
-
-    const double sinLat0 = std::sin(lat0 * kDegToRad);
-    const double cosLat0 = std::cos(lat0 * kDegToRad);
-    const double sinLon0 = std::sin(lon0 * kDegToRad);
-    const double cosLon0 = std::cos(lon0 * kDegToRad);
-    const double n0 = kWgs84A / std::sqrt(1.0 - e2 * sinLat0 * sinLat0);
-    const double x0 = n0 * cosLat0 * cosLon0;
-    const double y0 = n0 * cosLat0 * sinLon0;
-    const double z0 = n0 * (1.0 - e2) * sinLat0;
-
-    const double dx = x - x0;
-    const double dy = y - y0;
-    const double dz = z - z0;
-    const double east = -sinLon0 * dx + cosLon0 * dy;
-    const double north = -sinLat0 * cosLon0 * dx - sinLat0 * sinLon0 * dy + cosLat0 * dz;
-    return cv::Point2d(east, north);
+    const EnuPoint enu =
+        tmcmt::GeographicToEnu(GeoPoint{latitude, longitude}, GeoPoint{lat0, lon0});
+    return cv::Point2d(enu.east, enu.north);
 }
 
 Result<GeoBinding> GeoBinding::LoadFromFile(const std::string& path, GeoBindingOptions options) {

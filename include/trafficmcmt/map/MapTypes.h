@@ -1,0 +1,62 @@
+#pragma once
+
+#include <array>
+#include <cstdint>
+#include <string>
+#include <vector>
+
+#include "trafficmcmt/core/Geo.h"
+#include "trafficmcmt/core/Tracklet.h"
+#include "trafficmcmt/core/Types.h"
+
+namespace tmcmt::map {
+
+/// Largest integer that survives a round-trip through a JavaScript `number`.
+inline constexpr std::uint64_t kMaxJsSafeId = (1ULL << 53) - 1;
+
+enum class MapFrameType : std::uint8_t {
+    TracksUpdate = 0,
+    CameraZones = 1,
+    Heartbeat = 2,
+    IdMerge = 3,
+    TracksRemove = 4,
+};
+
+/// One track inside `tracks_update`.
+struct MapTrackUpdate {
+    std::uint64_t global_id = 0;
+    int camera_id = 0;
+    std::string class_name = "unknown";
+    GeoPoint position{};
+    EnuPoint velocity{};
+    bool has_velocity = false;
+    double speed_kmh = 0.0;
+    /// Empty means "omit": the viewer accumulates the trail itself.
+    std::vector<GeoPoint> trail;
+};
+
+struct MapCameraZone {
+    int camera_id = 0;
+    std::vector<GeoPoint> polygon;
+    std::array<int, 4> color{148, 163, 184, 55};
+};
+
+/// Protocol v1 frame. The JSON writer lives in `MapProtocol.cpp`.
+struct MapFrame {
+    MapFrameType type = MapFrameType::TracksUpdate;
+    Timestamp timestamp{};
+    bool snapshot = false;
+    std::vector<MapTrackUpdate> tracks;
+    std::vector<MapCameraZone> zones;
+    std::vector<std::uint64_t> removed_ids;
+    std::uint64_t old_id = 0;
+    std::uint64_t new_id = 0;
+};
+
+/// Viewer class name for a protocol object type (`person`, not `pedestrian`).
+[[nodiscard]] const char* MapClassName(ObjectType type) noexcept;
+
+/// Serialises a frame as one compact JSON object (protocol v1).
+[[nodiscard]] std::string ToJson(const MapFrame& frame);
+
+} // namespace tmcmt::map

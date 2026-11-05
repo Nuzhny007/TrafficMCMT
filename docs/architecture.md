@@ -1,8 +1,8 @@
 # TrafficMCMT — архитектура
 
 > **Статус документа:** живая спецификация. Обновляется вместе с кодом.
-> **Версия:** 0.3 (Этап 2 + тестовый пример на реальных видео)
-> **Дата:** 2026-11-03
+> **Версия:** 0.4 (Этап 2b: map-feed и viewer-протокол)
+> **Дата:** 2026-11-05
 
 ## 1. Назначение и границы
 
@@ -338,6 +338,108 @@ timestamp_ms = start_epoch_ms + round((start_frame + frame_index) * 1000 / fps)
 Разные `model_id` не дают Master смешивать несравнимые дескрипторы. DNN-ветка
 использует ImageNet mean/std (`0.485/0.456/0.406`, `0.229/0.224/0.225`) и
 `swapRB`, вход по умолчанию `128x256`.
+
+### 7.6. Map-feed: треки, траектории и скорость для viewer
+
+Поток данных (Этап 2b, без MTT/OpenCV/CUDA в Master):
+
+```
+mtt_export ──> TrackletChunk (JSONL/protobuf)
+                    │
+                    ▼
+        TrackletTimeline ──> MapFeed ──> MapFrame (protocol v1)
+                    │                       │
+             map_export                map_gateway ──> WebSocket ──> viewer
+             (JSONL)                   (replay/real-time)
+```
+
+**Общий ENU origin.** Поля `origin_lat = 13`, `origin_lon = 14` добавлены в
+`TrackletChunk` (аддитивно, старые файлы читаются как `0`). `Tracklet::HasOrigin()`
+и `ResolveMapOrigin()` действуют так:
+
+| Конфиг | Поток | Результат |
+|---|---|---|
+| задан | нет | origin из конфига, `from_stream=false` |
+| нет | задан | origin из потока, `from_stream=true` |
+| задан | задан | значения должны совпасть (1e-9), иначе ошибка |
+| нет | нет | ошибка с подсказкой задать `feed.origin` |
+| — | разные | ошибка «stream mixes ENU origins» |
+
+Единственный источник формул WGS84↔ENU — `core/Geo.h`; `GeoBinding` и map-слой
+делегируют туда, поэтому Edge и Master считают метры одинаково.
+
+**Модули.** `trafficmcmt_map` (без сокетов и OpenCV):
+
+| Компонент | Назначение |
+|---|---|
+| `MapConfig` | YAML `feed`/`cameras`, зоны из `[points]` (`geo_bind`) как выпуклая оболочка |
+| `TrackletTimeline` | слияние чанков в один поток наблюдений по timestamp |
+| `MapIdRegistry` | последовательные `global_id` (≤ 2⁵³), стабильные для потока |
+| `VelocityEstimator` | МНК по окну 1 с, fallback на конечную разность, кламп 70 м/с |
+| `TrailBuilder` | ≤ 40 точек, прореживание по 0.3 м |
+| `MapFeed` | наблюдения → `tracks_update` / `tracks_remove` / `camera_zones` |
+| `MapProtocol` | компактный JSON v1 (`position=[lon,lat]`, `velocity=[vx,vy]` м/с) |
+
+`trafficmcmt_net` — минимальный RFC 6455 сервер/клиент на платформенных сокетах
+(Winsock/POSIX), без сторонних зависимостей: handshake, text/ping/pong/close,
+`/health`, очередь на клиента (медленный клиент не блокирует продюсера).
+
+**Протокол.** Используется существующий v1 viewer-протокол с аддитивными
+расширениями:
+
+- `tracks_update.tracks[].speed_kmh` — модуль скорости в км/ч; если поля нет,
+  viewer считает `hypot(velocity) * 3.6`;
+- `tracks_remove {ids:[...]}` — немедленное удаление истёкших треков; старые
+  клиенты игнорируют неизвестный тип, TTL остаётся страховкой;
+- `id_merge` сохраняет прежнюю семантику (перенос trail на новый id).
+
+`tracks_update.mode=snapshot` отправляется новому клиенту вместе с
+`camera_zones`; дальше идут только дельты. `MapFeed::Tick` сначала удаляет
+истёкшие треки и лишь затем формирует обновления, поэтому мёртвый трек не
+получает финальный кадр.
+
+**Конфигурация.** `configs/map_feed.yaml` (Auburn, две камеры) и
+`configs/map_feed_aire.yaml` (Aire). Пример:
+
+```yaml
+feed:
+  origin: 32.606456,-85.481891
+  tick_hz: 10
+  trail_points: 40
+  trail_min_distance_m: 0.3
+  velocity_window_s: 1.0
+  velocity_max_mps: 70.0
+  track_ttl_s: 3.0
+  heartbeat_s: 5.0
+
+cameras:
+  - id: cam-01
+    camera_id: 1
+    color: [56, 189, 248, 55]
+    geo_bind: ../data/auburn_toomer/sync_videos/1_2021-05-09_22_24.ini
+```
+
+`camera_id` — числовой ID для viewer; `id` — строковый ID Edge. Относительные
+пути `geo_bind` ищутся от текущего каталога и от каталога конфига.
+
+**Запуск.**
+
+```powershell
+# offline: кадры в JSONL
+trafficmcmt_map_export --input build/datasets/auburn_toomer/combined.jsonl \
+  --config configs/map_feed.yaml --out build/map/auburn_frames.jsonl
+
+# WebSocket-реплей (1x)
+trafficmcmt_map_gateway --input build/datasets/auburn_toomer/combined.jsonl \
+  --config configs/map_feed.yaml --port 8080 --speed 1
+
+# smoke с реальным клиентом
+powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
+```
+
+`map_gateway` поддерживает `--loop`, `--exit-on-end`, `--duration`, `--speed 0`
+(без pacing) и `--frames-out` для отладки. `/health` возвращает
+`{"status":"ok","protocol":1,"active_tracks":N}`.
 
 ## 8. Алгоритмические решения
 

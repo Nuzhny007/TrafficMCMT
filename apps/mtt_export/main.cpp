@@ -675,6 +675,10 @@ int main(int argc, char** argv) {
     exportConfig.session_id = options->sessionId;
     exportConfig.chunk_interval_ms = options->chunkIntervalMs;
     exportConfig.model_id = extractor->ModelId();
+    if (geoBinding) {
+        exportConfig.origin_latitude = geoBinding->OriginLatitude();
+        exportConfig.origin_longitude = geoBinding->OriginLongitude();
+    }
     tmcmt::EdgeTrackExporter exporter(exportConfig);
 
     const cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(3, 3));

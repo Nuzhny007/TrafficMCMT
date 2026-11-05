@@ -1,0 +1,35 @@
+# Map feed for the two-camera Auburn / Toomer's Corner recording.
+#
+# The gateway turns Edge tracklets into viewer protocol v1 frames. The origin
+# below must match the `--geo-origin` used by `mtt_export` (see
+# `configs/datasets/auburn_toomer.yaml`); otherwise world coordinates of the
+# two cameras would be translated relative to each other.
+#
+# Relative `geo_bind` paths are resolved from the repository root, then from
+# this file's directory.
+
+feed:
+  origin: 32.606456,-85.481891
+
+  # Frame rate of `tracks_update` deltas.
+  tick_hz: 10
+  # Bounded trail; the viewer keeps its own copy as well.
+  trail_points: 40
+  trail_min_distance_m: 0.3
+  velocity_window_s: 1.0
+  velocity_max_mps: 70.0
+  # A track with no observations for this long is removed.
+  track_ttl_s: 3.0
+  # 0 disables periodic snapshots (new clients still receive one).
+  snapshot_interval_s: 0.0
+  heartbeat_s: 5.0
+
+cameras:
+  - id: cam-01
+    camera_id: 1
+    color: [56, 189, 248, 55]
+    geo_bind: ../data/auburn_toomer/sync_videos/1_2021-05-09_22_24.ini
+  - id: cam-02
+    camera_id: 2
+    color: [251, 191, 36, 55]
+    geo_bind: ../data/auburn_toomer/sync_videos/2_2021-05-09_22_24.ini

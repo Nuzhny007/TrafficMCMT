@@ -21,6 +21,9 @@ struct EdgeExportConfig {
     std::uint32_t schema_version = 1;
     /// Used when the extractor does not set `Embedding::model_id`.
     std::uint32_t model_id = 0;
+    /// Shared ENU origin written into every chunk. Zero means "not provided".
+    double origin_latitude = 0.0;
+    double origin_longitude = 0.0;
 };
 
 /// Aggregates per-track observations into `Tracklet` chunks.

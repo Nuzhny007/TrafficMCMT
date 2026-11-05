@@ -38,6 +38,8 @@ inline Tracklet MakeTracklet(std::string session_id = "session-a", std::string c
     tracklet.type = ObjectType::Car;
     tracklet.quality = 0.75f;
     tracklet.schema_version = 1;
+    tracklet.origin_latitude = 32.606456;
+    tracklet.origin_longitude = -85.481891;
 
     AssignTrackletId(tracklet);
     return tracklet;

@@ -8,7 +8,13 @@ if(TARGET trafficmcmt_io)
         unit/test_tracklet_codec.cpp
         unit/test_tracklet_normalizer.cpp
         unit/test_tracklet_store.cpp
-        unit/test_file_source.cpp)
+        unit/test_file_source.cpp
+        unit/test_geo.cpp)
+endif()
+
+if(TARGET trafficmcmt_map)
+    list(APPEND TMCMT_TEST_SOURCES
+        unit/test_map.cpp)
 endif()
 
 add_executable(trafficmcmt_unit_tests ${TMCMT_TEST_SOURCES})
@@ -25,6 +31,10 @@ if(TARGET trafficmcmt_io)
     # Golden protocol files live next to the tests, not next to the binary.
     target_compile_definitions(trafficmcmt_unit_tests
         PRIVATE TMCMT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+endif()
+
+if(TARGET trafficmcmt_map)
+    target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_map)
 endif()
 
 tmcmt_set_warnings(trafficmcmt_unit_tests)
@@ -50,6 +60,26 @@ if(TARGET trafficmcmt_edge)
     tmcmt_copy_runtime_dependencies(trafficmcmt_edge_tests)
 
     gtest_discover_tests(trafficmcmt_edge_tests
+        DISCOVERY_MODE PRE_TEST
+        DISCOVERY_TIMEOUT 30)
+endif()
+
+if(TARGET trafficmcmt_net)
+    add_executable(trafficmcmt_net_tests
+        unit/test_ws.cpp)
+
+    target_link_libraries(trafficmcmt_net_tests
+        PRIVATE
+            trafficmcmt_net
+            GTest::gtest_main)
+
+    # `test_ws.cpp` uses the internal socket helpers for the `/health` check.
+    target_include_directories(trafficmcmt_net_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/net)
+
+    tmcmt_set_warnings(trafficmcmt_net_tests)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_net_tests)
+
+    gtest_discover_tests(trafficmcmt_net_tests
         DISCOVERY_MODE PRE_TEST
         DISCOVERY_TIMEOUT 30)
 endif()

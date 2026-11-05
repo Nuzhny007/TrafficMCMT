@@ -22,6 +22,8 @@ option(TRAFFICMCMT_WITH_MTT       "Build Multitarget-tracker bridge (edge export
 option(TRAFFICMCMT_WITH_EDGE      "Build Edge helpers (ReID, tracklet chunking)" ON)
 option(TRAFFICMCMT_WITH_ZMQ       "ZeroMQ transport (stage 6)" OFF)
 option(TRAFFICMCMT_WITH_PROTOBUF  "Protobuf tracklet protocol (stage 2)" ON)
+option(TRAFFICMCMT_WITH_MAP       "Map feed: tracklets -> viewer protocol" ON)
+option(TRAFFICMCMT_WITH_WS        "WebSocket server for the map feed" ON)
 option(TRAFFICMCMT_WITH_FAISS     "FAISS vector index (stage 3)" OFF)
 option(TRAFFICMCMT_WITH_MUSSP     "muSSP min-cost flow solver (stage 5)" OFF)
 
@@ -36,6 +38,7 @@ include(CompilerWarnings)
 # ---------------------------------------------------------------------------
 add_library(trafficmcmt_core STATIC
     src/core/Config.cpp
+    src/core/Geo.cpp
     src/core/Log.cpp
     src/core/Result.cpp
     src/core/TrackletId.cpp)
@@ -99,6 +102,51 @@ if(TRAFFICMCMT_WITH_PROTOBUF)
     tmcmt_set_warnings(trafficmcmt_io)
 
     list(APPEND TMCMT_INSTALL_TARGETS trafficmcmt_proto trafficmcmt_io)
+endif()
+
+# ---------------------------------------------------------------------------
+# Map feed: converts Edge tracklets into the viewer WebSocket protocol (v1).
+# No OpenCV, no Multitarget-tracker, no sockets.
+# ---------------------------------------------------------------------------
+if(TRAFFICMCMT_WITH_MAP AND TARGET trafficmcmt_io)
+    add_library(trafficmcmt_map STATIC
+        src/map/MapConfig.cpp
+        src/map/MapFeed.cpp
+        src/map/MapIdRegistry.cpp
+        src/map/MapProtocol.cpp
+        src/map/TrackletTimeline.cpp
+        src/map/TrackletFiles.cpp
+        src/map/TrailBuilder.cpp
+        src/map/VelocityEstimator.cpp)
+    add_library(TrafficMCMT::map ALIAS trafficmcmt_map)
+
+    target_link_libraries(trafficmcmt_map
+        PUBLIC
+            trafficmcmt_core
+            trafficmcmt_io)
+    tmcmt_set_warnings(trafficmcmt_map)
+
+    list(APPEND TMCMT_INSTALL_TARGETS trafficmcmt_map)
+endif()
+
+# ---------------------------------------------------------------------------
+# WebSocket transport (RFC 6455). Platform sockets only, no third-party deps.
+# ---------------------------------------------------------------------------
+if(TRAFFICMCMT_WITH_WS)
+    add_library(trafficmcmt_net STATIC
+        src/net/WebSocketClient.cpp
+        src/net/WebSocketServer.cpp)
+    add_library(TrafficMCMT::net ALIAS trafficmcmt_net)
+
+    target_link_libraries(trafficmcmt_net
+        PUBLIC
+            trafficmcmt_core)
+    if(WIN32)
+        target_link_libraries(trafficmcmt_net PUBLIC ws2_32)
+    endif()
+    tmcmt_set_warnings(trafficmcmt_net)
+
+    list(APPEND TMCMT_INSTALL_TARGETS trafficmcmt_net)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -168,6 +216,20 @@ if(TARGET trafficmcmt_mtt AND TARGET trafficmcmt_io)
     tmcmt_copy_runtime_dependencies(trafficmcmt_mtt_export)
 endif()
 
+if(TARGET trafficmcmt_map)
+    add_executable(trafficmcmt_map_export apps/map_export/main.cpp)
+    target_link_libraries(trafficmcmt_map_export PRIVATE trafficmcmt_map)
+    tmcmt_set_warnings(trafficmcmt_map_export)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_map_export)
+
+    if(TARGET trafficmcmt_net)
+        add_executable(trafficmcmt_map_gateway apps/map_gateway/main.cpp)
+        target_link_libraries(trafficmcmt_map_gateway PRIVATE trafficmcmt_map trafficmcmt_net)
+        tmcmt_set_warnings(trafficmcmt_map_gateway)
+        tmcmt_copy_runtime_dependencies(trafficmcmt_map_gateway)
+    endif()
+endif()
+
 # ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
@@ -213,4 +275,6 @@ install(FILES
 install(FILES
     configs/master.yaml
     configs/logging.yaml
+    configs/map_feed.yaml
+    configs/map_feed_aire.yaml
     DESTINATION ${CMAKE_INSTALL_DATADIR}/trafficmcmt)

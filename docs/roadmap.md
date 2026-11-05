@@ -1,7 +1,7 @@
 # TrafficMCMT — roadmap
 
 > **Статус документа:** живая спецификация. Чекбоксы обновляются по мере выполнения.
-> **Версия:** 0.2 · **Дата:** 2026-11-03
+> **Версия:** 0.3 · **Дата:** 2026-11-05
 > **Оценки:** человеко-дни для одного senior C++ разработчика.
 
 ## Сводка
@@ -11,6 +11,7 @@
 | 1 | Базовая инфраструктура | 3–4 | ✅ | — |
 | 2 | Протокол и файловый I/O | 5–7 | ✅ | 1 |
 | 2a | Тестовый пример: реальные видео | 2–3 | ✅ | 2 |
+| 2b | Карта и viewer-фид (WebSocket v1) | 3–5 | ✅ | 2, 2a |
 | 3 | FAISS и базовый ReID | 7–10 | ⬜ | 2 |
 | 4 | st-ReID (Camera Link Model) | 8–12 | ⬜ | 2, 3 |
 | 5 | muSSP и глобальная ассоциация | 10–14 | ⬜ | 3, 4 |
@@ -19,7 +20,7 @@
 | 8 | BEV и мировые координаты | 8–12 | ⬜ | 4 |
 | 9 | Прод-обвязка (опция) | 5–7 | ⬜ | 6, 7 |
 
-**Итого:** 61–82 дней. Соло — 12–16 недель; два разработчика — 7–9 недель
+**Итого:** 64–87 дней. Соло — 13–17 недель; два разработчика — 8–10 недель
 (параллелятся: 3 ∥ 4, 6 ∥ 5, 8 ∥ 7).
 
 Условные обозначения: ⬜ не начат · 🟡 в работе · ✅ готов · ⛔ заблокирован.
@@ -197,6 +198,72 @@ powershell -ExecutionPolicy Bypass -File scripts/run_auburn_toomer.ps1 -MaxFrame
   только в одной камере, поэтому метрика считается по 2-секундному окну с общими объектами.
 - Короткие окна (300 кадров) выбраны для скорости; полный прогон — отдельная задача.
 - `yolov8s.onnx` скопирован в локальный `Multitarget-tracker/data/coco`; модель в git не входит.
+
+---
+
+## Этап 2b. Карта и viewer-фид (3–5 дней) ✅
+
+**Цель:** отдать обнаруженные объекты, их траектории и скорость на карту
+`traffic-mcmt-viewer` по существующему протоколу v1, не втягивая MTT/OpenCV/CUDA
+в Master. Master-часть работает с готовыми треклетами.
+
+### Задачи
+
+- [x] `TrackletChunk.origin_lat/origin_lon` (поля 13/14) + `Tracklet::HasOrigin()`,
+      codec, `EdgeExportConfig`, `mtt_export`
+- [x] `core/Geo.h` — единый WGS84↔ENU; `GeoBinding` делегирует туда
+- [x] `trafficmcmt_map`: `MapConfig`, `MapFeed`, `MapIdRegistry`, `VelocityEstimator`,
+      `TrailBuilder`, `TrackletTimeline`, `TrackletFiles`, `MapProtocol`
+- [x] `trafficmcmt_net`: RFC 6455 сервер/клиент на Winsock/POSIX, `/health`
+- [x] `apps/map_export` — offline: треклеты → JSONL-кадры v1
+- [x] `apps/map_gateway` — WebSocket-реплей: зоны+snapshot на коннект, дельты,
+      heartbeat, `--speed`, `--loop`, `--exit-on-end`, `--frames-out`
+- [x] `configs/map_feed.yaml` (Auburn, 2 камеры), `configs/map_feed_aire.yaml`
+- [x] Viewer: `speed_kmh`, `tracks_remove`, `TrackBuffer::remove`, отображение км/ч
+- [x] `scripts/smoke_map_gateway.ps1` — smoke с реальным WebSocket-клиентом
+- [x] Тесты `test_geo.cpp`, `test_map.cpp`, `test_ws.cpp`
+
+### Прогресс (2026-11-05)
+
+| Проверка | Результат |
+|---|---|
+| Сборка | `local-release`, MSVC 19.51 / VS 2026 — OK |
+| Тесты C++ | `ctest --preset local-release`: **117/117 passed** |
+| `map_export` Auburn | 226 треклетов, 6374 наблюдения → 107 кадров, `active_tracks=0` в конце |
+| `map_gateway` offline | `--speed 0 --exit-on-end`: 1 `tracks_update` + 5 `tracks_remove` |
+| `map_gateway` real-time | `--speed 2 --duration 2.5`: 49 `tracks_update` |
+| WebSocket smoke | 43 кадра за 4 с: `camera_zones=1`, `tracks_update=42`, `max_speed_kmh=52.55` |
+| Viewer | `vitest run`: **20/20**, `tsc --noEmit` — без ошибок |
+
+### Команды
+
+```powershell
+cmake --build --preset local-release
+ctest --preset local-release
+
+.\build\local-release\Release\trafficmcmt_map_export.exe `
+  --input build\datasets\auburn_toomer\combined.jsonl `
+  --config configs\map_feed.yaml --out build\map\auburn_frames.jsonl
+
+.\build\local-release\Release\trafficmcmt_map_gateway.exe `
+  --input build\datasets\auburn_toomer\combined.jsonl `
+  --config configs\map_feed.yaml --port 8080 --speed 1
+
+powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
+```
+
+Viewer: `npm run dev` (по умолчанию `ws://localhost:8080/ws`) или `npm run mock`.
+
+### Ограничения
+
+- `map_gateway` пока реплеит файлы; живой приём из ZeroMQ — Этап 6.
+- `origin` в конфиге должен совпадать с потоком; старые треклеты без origin
+  требуют явного `feed.origin`.
+- Зоны камер — выпуклая оболочка контрольных точек `geo_bind.ini`, а не точный
+  полигон обзора.
+- Скорость — мгновенная оценка (МНК 1 с); межкадровое сглаживание для UI не
+  добавлялось.
+- `tracks_remove` — аддитивное расширение; старые клиенты полагаются на TTL.
 
 ---
 
@@ -430,3 +497,4 @@ powershell -ExecutionPolicy Bypass -File scripts/run_auburn_toomer.ps1 -MaxFrame
 | 2026-11-03 | Добавлены `GeoBinding` (WGS84→ENU, гомография, RMS-проверка) и `TypeAwareReIdExtractor` (OSNet для пешеходов, HSV/DNN для транспорта); `mtt_export` получил геопривязку, детектор из `configs/detectors/*.ini`, `white_list` и общую временную базу |
 | 2026-11-03 | `ctest` 84/84; `aire` 300 кадров: 165 чанков / 4562 наблюдения, `world_valid=100%`; Auburn 300 кадров с кадра 1800: cam-01 66 чанков / 1856 наблюдений, cam-02 160 чанков / 4518 наблюдений, временные диапазоны совпадают |
 | 2026-11-03 | Добавлен общий ENU origin (`--geo-origin`, `origin_lat/origin_lon`); межкамерные world-координаты Auburn в 2-секундном окне: 199 совпавших timestamp, 0.53–2.80 м (медиана 1.62 м), все ≤ 5 м; добавлены `scripts/run_aire.ps1`, `scripts/run_auburn_toomer.ps1`, манифесты датасетов |
+| 2026-11-05 | Этап 2b завершён: origin в протоколе, `core/Geo`, `trafficmcmt_map`, `trafficmcmt_net` (RFC 6455), `map_export`, `map_gateway`, `configs/map_feed*.yaml`; viewer получил `speed_kmh` и `tracks_remove`; `ctest` 117/117, `vitest` 20/20; smoke gateway: 43 кадра/4 с, скорость до 52.55 км/ч |

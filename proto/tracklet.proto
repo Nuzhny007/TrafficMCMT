@@ -129,6 +129,13 @@ message TrackletChunk {
     float quality = 11;
 
     MessageKind kind = 12;
+
+    // Shared ENU origin (WGS-84 degrees) used for `Observation.world`.
+    // All cameras that must be aligned in one metric frame send the same
+    // origin. Zero means "not provided"; consumers then fall back to their
+    // local configuration.
+    double origin_lat = 13;
+    double origin_lon = 14;
 }
 
 message CameraStatus {

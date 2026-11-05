@@ -138,6 +138,8 @@ void ToProto(const Tracklet& tracklet, proto::TrackletChunk& out, const Tracklet
     out.set_type(ToProto(tracklet.type));
     out.set_quality(tracklet.quality);
     out.set_kind(tracklet.is_end ? proto::MESSAGE_KIND_TRACK_END : proto::MESSAGE_KIND_TRACKLET);
+    out.set_origin_lat(tracklet.origin_latitude);
+    out.set_origin_lon(tracklet.origin_longitude);
 }
 
 void ToProto(const CameraCalibration& calibration, proto::CameraCalibration& out) {
@@ -278,6 +280,11 @@ Result<Tracklet> FromProto(const proto::TrackletChunk& chunk) {
     out.type = FromProto(chunk.type());
     out.quality = chunk.quality();
     out.is_end = chunk.kind() == proto::MESSAGE_KIND_TRACK_END;
+    out.origin_latitude = chunk.origin_lat();
+    out.origin_longitude = chunk.origin_lon();
+    if (!std::isfinite(out.origin_latitude) || !std::isfinite(out.origin_longitude)) {
+        return MakeStatus(ErrorCode::InvalidArgument, "tracklet origin is not finite");
+    }
 
     out.observations.reserve(static_cast<std::size_t>(chunk.observations_size()));
     for (const proto::Observation& observation : chunk.observations()) {

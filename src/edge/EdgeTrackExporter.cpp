@@ -139,6 +139,8 @@ std::vector<Tracklet> EdgeTrackExporter::Emit(TrackState& state, Timestamp now, 
     tracklet.type = state.type;
     tracklet.schema_version = m_config.schema_version;
     tracklet.is_end = final;
+    tracklet.origin_latitude = m_config.origin_latitude;
+    tracklet.origin_longitude = m_config.origin_longitude;
     const std::size_t chunkSize = tracklet.observations.size();
 
     tracklet.embedding.values = state.embedding_sum;
