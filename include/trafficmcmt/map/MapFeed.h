@@ -9,6 +9,8 @@
 
 #include "trafficmcmt/core/Tracklet.h"
 #include "trafficmcmt/core/Types.h"
+#include "trafficmcmt/emissions/EmissionSimulator.h"
+#include "trafficmcmt/map/AccelerationEstimator.h"
 #include "trafficmcmt/map/MapConfig.h"
 #include "trafficmcmt/map/MapIdRegistry.h"
 #include "trafficmcmt/map/MapTypes.h"
@@ -39,6 +41,10 @@ public:
 
     /// Static camera zones; sent once per connection.
     [[nodiscard]] MapFrame CameraZones(Timestamp now) const;
+
+    /// Current concentration map for a newly connected client, or nullopt when
+    /// emissions are disabled.
+    [[nodiscard]] std::optional<MapFrame> EmissionSnapshot(Timestamp now);
 
     [[nodiscard]] MapFrame Heartbeat(Timestamp now) const;
 
@@ -71,6 +77,7 @@ private:
         Timestamp last_seen{};
         TrailBuilder trail;
         VelocityEstimator velocity;
+        AccelerationEstimator acceleration;
         bool dirty = false;
         bool announced = false;
     };
@@ -81,6 +88,7 @@ private:
     GeoPoint m_origin{};
     MapIdRegistry m_ids;
     std::unordered_map<std::uint64_t, TrackState> m_tracks;
+    std::optional<emissions::EmissionSimulator> m_emissions;
     std::size_t m_unknownCameraObservations = 0;
 };
 

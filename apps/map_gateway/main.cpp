@@ -299,6 +299,9 @@ int main(int argc, char** argv) {
             std::lock_guard<std::mutex> lock(feedMutex);
             frames.push_back(tmcmt::map::ToJson(feed->CameraZones(feedNow)));
             frames.push_back(tmcmt::map::ToJson(feed->Snapshot(feedNow)));
+            if (const std::optional<tmcmt::map::MapFrame> emission = feed->EmissionSnapshot(feedNow)) {
+                frames.push_back(tmcmt::map::ToJson(*emission));
+            }
         }
         for (const std::string& frame : frames) {
             server.SendTo(clientId, frame);

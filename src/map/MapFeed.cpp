@@ -5,15 +5,44 @@
 #include <utility>
 
 namespace tmcmt::map {
+namespace {
+
+MapFrame MakeEmissionFrame(const emissions::EmissionGridSnapshot& snapshot) {
+    MapFrame frame;
+    frame.type = MapFrameType::EmissionGrid;
+    frame.timestamp = snapshot.timestamp;
+
+    MapEmissionGrid grid;
+    grid.south_west = snapshot.south_west;
+    grid.north_east = snapshot.north_east;
+    grid.cols = snapshot.cols;
+    grid.rows = snapshot.rows;
+    for (std::size_t i = 0; i < grid.fields.size(); ++i) {
+        grid.fields[i].values = snapshot.fields[i];
+        grid.fields[i].max = snapshot.stats[i].max;
+        grid.fields[i].mean = snapshot.stats[i].mean;
+        grid.fields[i].p95 = snapshot.stats[i].p95;
+    }
+
+    frame.emission = std::move(grid);
+    return frame;
+}
+
+} // namespace
 
 MapFeed::TrackState::TrackState(std::uint64_t id, int camera, std::string className, const MapFeedConfig& config)
     : global_id(id),
       camera_id(camera),
       class_name(std::move(className)),
       trail(config.trail_points, config.trail_min_distance_m),
-      velocity(config.velocity_window_s, config.velocity_max_mps) {}
+      velocity(config.velocity_window_s, config.velocity_max_mps),
+      acceleration(config.acceleration_window_s, config.acceleration_max_mps2) {}
 
-MapFeed::MapFeed(MapFeedConfig config) : m_config(std::move(config)), m_origin(m_config.Origin()) {}
+MapFeed::MapFeed(MapFeedConfig config) : m_config(std::move(config)), m_origin(m_config.Origin()) {
+    if (m_config.emissions.enabled) {
+        m_emissions.emplace(m_config.emissions, m_origin);
+    }
+}
 
 void MapFeed::Observe(const Tracklet& tracklet, const Observation& observation) {
     if (!observation.world.valid || !observation.world.IsFinite()) {
@@ -39,6 +68,9 @@ void MapFeed::Observe(const Tracklet& tracklet, const Observation& observation) 
     const EnuPoint point{observation.world.x, observation.world.y};
     state.trail.Add(point);
     state.velocity.Add(observation.ts, point);
+    if (const std::optional<EnuPoint> velocity = state.velocity.Estimate(observation.ts)) {
+        state.acceleration.Add(observation.ts, std::hypot(velocity->east, velocity->north));
+    }
     state.last_seen = std::max(state.last_seen, observation.ts);
     state.dirty = true;
 }
@@ -112,6 +144,35 @@ std::vector<MapFrame> MapFeed::Tick(Timestamp now) {
         frames.push_back(std::move(frame));
     }
 
+    if (m_emissions) {
+        std::vector<emissions::EmissionSource> sources;
+        sources.reserve(m_tracks.size());
+        for (const auto& [id, state] : m_tracks) {
+            (void)id;
+            const std::vector<EnuPoint>& points = state.trail.Points();
+            if (points.empty()) {
+                continue;
+            }
+
+            emissions::EmissionSource source;
+            source.track_id = state.global_id;
+            source.position = points.back();
+            if (const std::optional<EnuPoint> velocity = state.velocity.Estimate(now)) {
+                source.speed_mps = std::hypot(velocity->east, velocity->north);
+            }
+            source.acceleration_mps2 = state.acceleration.Estimate(now).value_or(0.0);
+            source.class_name = state.class_name;
+            sources.push_back(source);
+        }
+
+        m_emissions->Step(now, sources);
+        if (m_emissions->GridDue(now)) {
+            if (std::optional<emissions::EmissionGridSnapshot> snapshot = m_emissions->BuildSnapshot(now)) {
+                frames.push_back(MakeEmissionFrame(*snapshot));
+            }
+        }
+    }
+
     return frames;
 }
 
@@ -150,6 +211,17 @@ MapFrame MapFeed::CameraZones(Timestamp now) const {
         frame.zones.push_back(std::move(zone));
     }
     return frame;
+}
+
+std::optional<MapFrame> MapFeed::EmissionSnapshot(Timestamp now) {
+    if (!m_emissions) {
+        return std::nullopt;
+    }
+    std::optional<emissions::EmissionGridSnapshot> snapshot = m_emissions->BuildSnapshot(now);
+    if (!snapshot) {
+        return std::nullopt;
+    }
+    return MakeEmissionFrame(*snapshot);
 }
 
 MapFrame MapFeed::Heartbeat(Timestamp now) const {

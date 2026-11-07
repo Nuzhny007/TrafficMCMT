@@ -18,11 +18,38 @@ feed:
   trail_min_distance_m: 0.3
   velocity_window_s: 1.0
   velocity_max_mps: 70.0
+  # The tracker's speed derivative is noisy; real road vehicles stay well below
+  # 3 m/s^2 and HBEFA is very sensitive to acceleration.
+  acceleration_window_s: 1.5
+  acceleration_max_mps2: 3.0
   # A track with no observations for this long is removed.
   track_ttl_s: 3.0
   # 0 disables periodic snapshots (new clients still receive one).
   snapshot_interval_s: 0.0
   heartbeat_s: 5.0
+
+# Gaussian puff dispersion (stage 2c). The grid is centred on the shared ENU
+# origin and spans 600 x 450 m with 5 m cells (120 x 90). Disable this block to
+# get exactly the stage-2b frames.
+emissions:
+  enabled: true
+  stability_class: D
+  wind:
+    speed_mps: 2.5
+    from_deg: 225
+  source_height_m: 0.5
+  breathing_height_m: 1.5
+  puff_interval_s: 1.0
+  max_age_s: 180
+  max_puffs: 3000
+  pm25_fraction: 0.5
+  grid_hz: 1.0
+  grid:
+    center_lat: 32.606456
+    center_lon: -85.481891
+    width_m: 600
+    height_m: 450
+    cell_m: 5
 
 cameras:
   - id: cam-01

@@ -60,9 +60,26 @@ target_link_libraries(trafficmcmt_core
 tmcmt_set_warnings(trafficmcmt_core)
 
 # ---------------------------------------------------------------------------
+# Emissions: HBEFA rates + Gaussian puff dispersion.
+# Pure C++, no OpenCV, no Multitarget-tracker, no sockets.
+# ---------------------------------------------------------------------------
+add_library(trafficmcmt_emissions STATIC
+    src/emissions/ConcentrationGrid.cpp
+    src/emissions/EmissionSimulator.cpp
+    src/emissions/GaussianPuffModel.cpp
+    src/emissions/HbefaEmissionModel.cpp
+    src/emissions/PasquillGifford.cpp)
+add_library(TrafficMCMT::emissions ALIAS trafficmcmt_emissions)
+
+target_link_libraries(trafficmcmt_emissions
+    PUBLIC
+        trafficmcmt_core)
+tmcmt_set_warnings(trafficmcmt_emissions)
+
+# ---------------------------------------------------------------------------
 # Protocol: generated protobuf messages (stage 2).
 # ---------------------------------------------------------------------------
-set(TMCMT_INSTALL_TARGETS trafficmcmt_core)
+set(TMCMT_INSTALL_TARGETS trafficmcmt_core trafficmcmt_emissions)
 
 if(TRAFFICMCMT_WITH_PROTOBUF)
     set(TMCMT_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
@@ -110,6 +127,7 @@ endif()
 # ---------------------------------------------------------------------------
 if(TRAFFICMCMT_WITH_MAP AND TARGET trafficmcmt_io)
     add_library(trafficmcmt_map STATIC
+        src/map/AccelerationEstimator.cpp
         src/map/MapConfig.cpp
         src/map/MapFeed.cpp
         src/map/MapIdRegistry.cpp
@@ -123,6 +141,7 @@ if(TRAFFICMCMT_WITH_MAP AND TARGET trafficmcmt_io)
     target_link_libraries(trafficmcmt_map
         PUBLIC
             trafficmcmt_core
+            trafficmcmt_emissions
             trafficmcmt_io)
     tmcmt_set_warnings(trafficmcmt_map)
 

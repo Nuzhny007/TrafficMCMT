@@ -12,6 +12,11 @@ if(TARGET trafficmcmt_io)
         unit/test_geo.cpp)
 endif()
 
+if(TARGET trafficmcmt_emissions)
+    list(APPEND TMCMT_TEST_SOURCES
+        unit/test_emissions.cpp)
+endif()
+
 if(TARGET trafficmcmt_map)
     list(APPEND TMCMT_TEST_SOURCES
         unit/test_map.cpp)
@@ -31,6 +36,10 @@ if(TARGET trafficmcmt_io)
     # Golden protocol files live next to the tests, not next to the binary.
     target_compile_definitions(trafficmcmt_unit_tests
         PRIVATE TMCMT_TEST_DATA_DIR="${CMAKE_CURRENT_SOURCE_DIR}/data")
+endif()
+
+if(TARGET trafficmcmt_emissions)
+    target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_emissions)
 endif()
 
 if(TARGET trafficmcmt_map)

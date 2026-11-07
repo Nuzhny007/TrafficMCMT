@@ -243,6 +243,13 @@ bool ReadPolygon(const YAML::Node& node, std::vector<GeoPoint>& polygon) {
     return polygon.size() >= 3;
 }
 
+bool ReadWind(const YAML::Node& node, emissions::WindConfig& wind) {
+    if (!node || !node.IsMap()) {
+        return false;
+    }
+    return ReadScalar(node, "speed_mps", wind.speed_mps) && ReadScalar(node, "from_deg", wind.from_deg);
+}
+
 } // namespace
 
 Result<MapFeedConfig> LoadMapFeedConfig(const std::string& path) {
@@ -278,6 +285,57 @@ Result<MapFeedConfig> LoadMapFeedConfig(const std::string& path) {
             ReadScalar(feed, "track_ttl_s", config.track_ttl_s);
             ReadScalar(feed, "snapshot_interval_s", config.snapshot_interval_s);
             ReadScalar(feed, "heartbeat_s", config.heartbeat_s);
+            ReadScalar(feed, "acceleration_window_s", config.acceleration_window_s);
+            ReadScalar(feed, "acceleration_max_mps2", config.acceleration_max_mps2);
+        }
+
+        const YAML::Node emissionsNode = root["emissions"];
+        if (emissionsNode && emissionsNode.IsMap()) {
+            emissions::EmissionConfig& emission = config.emissions;
+            ReadScalar(emissionsNode, "enabled", emission.enabled);
+            if (emissionsNode["stability_class"]) {
+                const auto stability =
+                    emissions::ParseStabilityClass(emissionsNode["stability_class"].as<std::string>());
+                if (!stability) {
+                    return Fail("emissions.stability_class", "must be one of A, B, C, D, E, F");
+                }
+                emission.stability = *stability;
+            }
+            if (emissionsNode["wind"] && !ReadWind(emissionsNode["wind"], emission.wind)) {
+                return Fail("emissions.wind", "must be a {speed_mps, from_deg} mapping");
+            }
+            ReadScalar(emissionsNode, "source_height_m", emission.source_height_m);
+            ReadScalar(emissionsNode, "breathing_height_m", emission.breathing_height_m);
+            ReadScalar(emissionsNode, "mixing_height_m", emission.mixing_height_m);
+            ReadScalar(emissionsNode, "puff_interval_s", emission.puff_interval_s);
+            ReadScalar(emissionsNode, "max_age_s", emission.max_age_s);
+            ReadScalar(emissionsNode, "max_puffs", emission.max_puffs);
+            ReadScalar(emissionsNode, "pm25_fraction", emission.pm25_fraction);
+            ReadScalar(emissionsNode, "grid_hz", emission.grid_hz);
+            ReadScalar(emissionsNode, "min_peak_ug_m3", emission.min_peak_ug_m3);
+            ReadScalar(emissionsNode, "clamp_negative_acceleration", emission.clamp_negative_acceleration);
+
+            if (emissionsNode["grid"]) {
+                const YAML::Node grid = emissionsNode["grid"];
+                if (!grid.IsMap()) {
+                    return Fail("emissions.grid", "must be a mapping");
+                }
+                const bool hasLat = static_cast<bool>(grid["center_lat"]);
+                const bool hasLon = static_cast<bool>(grid["center_lon"]);
+                if (hasLat != hasLon) {
+                    return Fail("emissions.grid.center_*", "center_lat and center_lon must be set together");
+                }
+                if (hasLat) {
+                    emission.grid.center_latitude = grid["center_lat"].as<double>();
+                    emission.grid.center_longitude = grid["center_lon"].as<double>();
+                    emission.grid.has_center = true;
+                }
+                ReadScalar(grid, "width_m", emission.grid.width_m);
+                ReadScalar(grid, "height_m", emission.grid.height_m);
+                ReadScalar(grid, "cell_m", emission.grid.cell_m);
+                ReadScalar(grid, "max_cols", emission.grid.max_cols);
+                ReadScalar(grid, "max_rows", emission.grid.max_rows);
+            }
         }
 
         const YAML::Node cameras = root["cameras"];
@@ -348,6 +406,48 @@ Result<MapFeedConfig> LoadMapFeedConfig(const std::string& path) {
     }
     if (!(config.heartbeat_s > 0.0)) {
         return Fail("feed.heartbeat_s", "must be > 0");
+    }
+    if (!(config.acceleration_window_s > 0.0) || !(config.acceleration_max_mps2 > 0.0)) {
+        return Fail("feed.acceleration_*", "must be positive");
+    }
+
+    const emissions::EmissionConfig& emission = config.emissions;
+    if (!std::isfinite(emission.wind.speed_mps) || emission.wind.speed_mps < 0.0) {
+        return Fail("emissions.wind.speed_mps", "must be >= 0");
+    }
+    if (!std::isfinite(emission.wind.from_deg)) {
+        return Fail("emissions.wind.from_deg", "must be finite");
+    }
+    if (!(emission.source_height_m > 0.0) || !(emission.breathing_height_m > 0.0)) {
+        return Fail("emissions.*_height_m", "must be > 0");
+    }
+    if (!(emission.mixing_height_m > 0.0)) {
+        return Fail("emissions.mixing_height_m", "must be > 0");
+    }
+    if (!(emission.puff_interval_s > 0.0)) {
+        return Fail("emissions.puff_interval_s", "must be > 0");
+    }
+    if (!(emission.max_age_s > 0.0)) {
+        return Fail("emissions.max_age_s", "must be > 0");
+    }
+    if (emission.max_puffs == 0) {
+        return Fail("emissions.max_puffs", "must be >= 1");
+    }
+    if (emission.pm25_fraction < 0.0 || emission.pm25_fraction > 1.0) {
+        return Fail("emissions.pm25_fraction", "must be in 0..1");
+    }
+    if (!(emission.grid_hz > 0.0)) {
+        return Fail("emissions.grid_hz", "must be > 0");
+    }
+    if (emission.min_peak_ug_m3 < 0.0) {
+        return Fail("emissions.min_peak_ug_m3", "must be >= 0");
+    }
+    if (!(emission.grid.cell_m > 0.0) || !(emission.grid.width_m > 0.0) ||
+        !(emission.grid.height_m > 0.0)) {
+        return Fail("emissions.grid", "cell_m, width_m and height_m must be > 0");
+    }
+    if (emission.grid.max_cols < 1 || emission.grid.max_rows < 1) {
+        return Fail("emissions.grid.max_*", "must be >= 1");
     }
 
     return config;

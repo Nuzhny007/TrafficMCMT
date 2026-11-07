@@ -9,6 +9,7 @@
 #include "trafficmcmt/core/Result.h"
 #include "trafficmcmt/core/Tracklet.h"
 #include "trafficmcmt/core/Types.h"
+#include "trafficmcmt/emissions/EmissionConfig.h"
 
 namespace tmcmt::map {
 
@@ -36,6 +37,14 @@ struct MapFeedConfig {
     /// 0 disables periodic snapshots (snapshots are still sent on connect).
     double snapshot_interval_s = 0.0;
     double heartbeat_s = 5.0;
+
+    /// Acceleration smoothing used by the emission model.
+    double acceleration_window_s = 1.5;
+    double acceleration_max_mps2 = 5.0;
+
+    /// Gaussian puff dispersion. Disabled by default so existing recordings
+    /// keep producing exactly the same frames.
+    emissions::EmissionConfig emissions;
 
     std::vector<MapCameraConfig> cameras;
 

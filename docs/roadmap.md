@@ -12,6 +12,7 @@
 | 2 | Протокол и файловый I/O | 5–7 | ✅ | 1 |
 | 2a | Тестовый пример: реальные видео | 2–3 | ✅ | 2 |
 | 2b | Карта и viewer-фид (WebSocket v1) | 3–5 | ✅ | 2, 2a |
+| 2c | Gaussian puff: выбросы и концентрации | 4–6 | ✅ | 2b |
 | 3 | FAISS и базовый ReID | 7–10 | ⬜ | 2 |
 | 4 | st-ReID (Camera Link Model) | 8–12 | ⬜ | 2, 3 |
 | 5 | muSSP и глобальная ассоциация | 10–14 | ⬜ | 3, 4 |
@@ -20,7 +21,7 @@
 | 8 | BEV и мировые координаты | 8–12 | ⬜ | 4 |
 | 9 | Прод-обвязка (опция) | 5–7 | ⬜ | 6, 7 |
 
-**Итого:** 64–87 дней. Соло — 13–17 недель; два разработчика — 8–10 недель
+**Итого:** 68–93 дней. Соло — 14–19 недель; два разработчика — 9–11 недель
 (параллелятся: 3 ∥ 4, 6 ∥ 5, 8 ∥ 7).
 
 Условные обозначения: ⬜ не начат · 🟡 в работе · ✅ готов · ⛔ заблокирован.
@@ -267,6 +268,76 @@ Viewer: `npm run dev` (по умолчанию `ws://localhost:8080/ws`) или 
 
 ---
 
+## Этап 2c. Gaussian puff: выбросы и концентрации (4–6 дней) ✅
+
+**Цель:** считать в реальном времени выбросы автомобилей по HBEFA и показывать
+приземные концентрации NOx/CO/PM2.5/PM10/CO2 на карте viewer'а, не втягивая
+MTT/OpenCV/CUDA в Master.
+
+### Задачи
+
+- [x] `trafficmcmt_emissions`: `EmissionTypes`, `IEmissionModel`,
+      `HbefaEmissionModel`, `PasquillGifford`, `GaussianPuffModel`,
+      `ConcentrationGrid`, `EmissionConfig`, `EmissionSimulator`
+- [x] `AccelerationEstimator` (МНК + EMA + кламп) и `TrackState::acceleration`
+- [x] `MapTypes`: `MapFrameType::EmissionGrid`, `MapEmissionField`,
+      `MapEmissionGrid`, `MapFrame::emission`
+- [x] `MapProtocol`: base64 float32 LE, все 5 полей, статистика `max/mean/p95`
+- [x] `MapConfig`: секция `emissions:` + валидация; конфиги Auburn и Aire
+- [x] `MapFeed`: интеграция симулятора в `Tick`, `EmissionSnapshot()`
+- [x] `map_gateway`: последний emission-снапшот новому клиенту
+- [x] `map_export`: emission-кадры в JSONL для обоих датасетов
+- [x] Viewer: парсер `emission_grid`, `EmissionBuffer`, палитры на загрязнитель,
+      `BitmapLayer`, панель с переключателем/легендой/статистикой
+- [x] Тесты `test_emissions.cpp` (физика, HBEFA, сетка, симулятор),
+      `test_map.cpp` (протокол, конфиг, фид), `palette.test.ts`, `protocol.test.ts`
+- [x] `docs/emissions-attribution.md` — происхождение таблицы HBEFA и лицензии
+
+### Прогресс (2026-11-07)
+
+| Проверка | Результат |
+|---|---|
+| Сборка | `local-release`, MSVC 19.51 / VS 2026 — OK |
+| Тесты C++ | `ctest --preset local-release`: **155/155 passed** |
+| Тесты viewer | `vitest run`: **28/28**, `tsc --noEmit` — без ошибок |
+| `map_export` Aire | `cols=120`, `rows=90`, 5 полей; NOx `max=15561`, `p95=465` мкг/м³ |
+| `map_export` Auburn | `cols=120`, `rows=90`, 5 полей; NOx `max=848`, `p95=169` мкг/м³ |
+| `map_gateway` + viewer | слой концентраций вдоль шоссе, панель и переключение работают |
+| Контроль σ | σ_y(D,1 км)=75.3 м, σ_z(D)=29.1 м; A/F совпадают с эталоном |
+
+### Команды
+
+```powershell
+cmake --build --preset local-release
+ctest --preset local-release
+
+.\build\local-release\Release\trafficmcmt_map_export.exe `
+  --input build\datasets\aire\cam-01.jsonl `
+  --config configs\map_feed_aire.yaml --out build\map\frames_aire_emissions.jsonl
+
+.\build\local-release\Release\trafficmcmt_map_gateway.exe `
+  --input build\datasets\aire\cam-01.jsonl `
+  --config configs\map_feed_aire.yaml --port 8080 --speed 0.5 --loop
+```
+
+Viewer: `npm run dev`, кадры `emission_grid` приходят с частотой 1 Гц.
+
+### Ограничения
+
+- Модель — стационарный ветер и один класс устойчивости на прогон; поля ветра
+  и рельеф не учитываются.
+- HBEFA-таблица содержит только 3 класса; `bike`/`person` дают нулевые ставки,
+  мотоцикл приближён строкой `P_LDV_7_1`.
+- `PM2.5` — доля `PMx` (`pm25_fraction`), а не отдельная строка HBEFA.
+- Отрицательное ускорение клампится к нулю по умолчанию (отличие от эталона
+  SUMO, см. `docs/emissions-attribution.md`).
+- Сетка центрируется на ENU-origin и не следует за камерой; для другого
+  участка нужен свой конфиг.
+- Лицензионный статус перенесённой таблицы требует юридической проверки перед
+  публичным распространением.
+
+---
+
 ## Этап 3. FAISS и базовый ReID (7–10 дней) ⬜
 
 **Цель:** top-K похожих треклетов с других камер; измеримое качество ReID.
@@ -498,3 +569,4 @@ Viewer: `npm run dev` (по умолчанию `ws://localhost:8080/ws`) или 
 | 2026-11-03 | `ctest` 84/84; `aire` 300 кадров: 165 чанков / 4562 наблюдения, `world_valid=100%`; Auburn 300 кадров с кадра 1800: cam-01 66 чанков / 1856 наблюдений, cam-02 160 чанков / 4518 наблюдений, временные диапазоны совпадают |
 | 2026-11-03 | Добавлен общий ENU origin (`--geo-origin`, `origin_lat/origin_lon`); межкамерные world-координаты Auburn в 2-секундном окне: 199 совпавших timestamp, 0.53–2.80 м (медиана 1.62 м), все ≤ 5 м; добавлены `scripts/run_aire.ps1`, `scripts/run_auburn_toomer.ps1`, манифесты датасетов |
 | 2026-11-05 | Этап 2b завершён: origin в протоколе, `core/Geo`, `trafficmcmt_map`, `trafficmcmt_net` (RFC 6455), `map_export`, `map_gateway`, `configs/map_feed*.yaml`; viewer получил `speed_kmh` и `tracks_remove`; `ctest` 117/117, `vitest` 20/20; smoke gateway: 43 кадра/4 с, скорость до 52.55 км/ч |
+| 2026-11-07 | Этап 2c завершён: `trafficmcmt_emissions` (HBEFA, Pasquill-Gifford, Gaussian puff, сетка), `AccelerationEstimator`, кадр `emission_grid` (base64 f32 LE, 5 полей), панель концентраций в viewer; `ctest` 155/155, `vitest` 28/28; `map_export` Aire/Auburn по 120×90×5 полей |

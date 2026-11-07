@@ -1,7 +1,10 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -9,6 +12,7 @@
 
 #include "trafficmcmt/core/Geo.h"
 #include "trafficmcmt/core/Tracklet.h"
+#include "trafficmcmt/map/AccelerationEstimator.h"
 #include "trafficmcmt/map/MapConfig.h"
 #include "trafficmcmt/map/MapFeed.h"
 #include "trafficmcmt/map/MapIdRegistry.h"
@@ -477,6 +481,254 @@ TEST(MapConfig, RejectsConflictingOrigins) {
     other.origin_latitude = 46.0;
     auto mixed = map::ResolveMapOrigin({withOrigin, other}, config);
     ASSERT_FALSE(mixed);
+}
+
+// ---------------------------------------------------------------------------
+// Acceleration
+// ---------------------------------------------------------------------------
+
+TEST(AccelerationEstimator, RecoversConstantAcceleration) {
+    map::AccelerationEstimator estimator(1.5, 5.0, 0.5);
+    for (int i = 0; i <= 4; ++i) {
+        const double t = 0.5 * static_cast<double>(i);
+        estimator.Add(Timestamp(static_cast<std::int64_t>(t * 1000.0)), 2.0 * t);
+    }
+    const std::optional<double> estimate = estimator.Estimate(Timestamp(2000));
+    ASSERT_TRUE(estimate.has_value());
+    EXPECT_NEAR(*estimate, 2.0, 1e-9);
+}
+
+TEST(AccelerationEstimator, ReturnsNulloptWhenShortOrStale) {
+    map::AccelerationEstimator estimator;
+    EXPECT_FALSE(estimator.Estimate(Timestamp(0)).has_value());
+
+    estimator.Add(Timestamp(0), 1.0);
+    EXPECT_FALSE(estimator.Estimate(Timestamp(0)).has_value());
+
+    estimator.Add(Timestamp(500), 2.0);
+    EXPECT_TRUE(estimator.Estimate(Timestamp(1000)).has_value());
+    EXPECT_FALSE(estimator.Estimate(Timestamp(2001)).has_value());
+}
+
+TEST(AccelerationEstimator, ClampsExtremeValues) {
+    map::AccelerationEstimator estimator(2.0, 5.0, 1.0);
+    estimator.Add(Timestamp(0), 0.0);
+    estimator.Add(Timestamp(1000), 50.0);
+    const std::optional<double> estimate = estimator.Estimate(Timestamp(1000));
+    ASSERT_TRUE(estimate.has_value());
+    EXPECT_LE(*estimate, 5.0);
+    EXPECT_GE(*estimate, -5.0);
+}
+
+// ---------------------------------------------------------------------------
+// Emission grid protocol and feed integration
+// ---------------------------------------------------------------------------
+
+std::vector<float> DecodeBase64Floats(const std::string& text) {
+    static const std::string kAlphabet =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::array<int, 256> lookup{};
+    lookup.fill(-1);
+    for (std::size_t i = 0; i < kAlphabet.size(); ++i) {
+        lookup[static_cast<unsigned char>(kAlphabet[i])] = static_cast<int>(i);
+    }
+
+    std::vector<std::uint8_t> bytes;
+    std::uint32_t buffer = 0;
+    int bits = 0;
+    for (const char ch : text) {
+        if (ch == '=') {
+            break;
+        }
+        const int value = lookup[static_cast<unsigned char>(ch)];
+        if (value < 0) {
+            continue;
+        }
+        buffer = (buffer << 6) | static_cast<std::uint32_t>(value);
+        bits += 6;
+        if (bits >= 8) {
+            bits -= 8;
+            bytes.push_back(static_cast<std::uint8_t>((buffer >> bits) & 0xFFu));
+        }
+    }
+
+    std::vector<float> floats(bytes.size() / 4);
+    for (std::size_t i = 0; i < floats.size(); ++i) {
+        const std::uint32_t bits32 = static_cast<std::uint32_t>(bytes[4 * i]) |
+                                     (static_cast<std::uint32_t>(bytes[4 * i + 1]) << 8) |
+                                     (static_cast<std::uint32_t>(bytes[4 * i + 2]) << 16) |
+                                     (static_cast<std::uint32_t>(bytes[4 * i + 3]) << 24);
+        std::memcpy(&floats[i], &bits32, sizeof(float));
+    }
+    return floats;
+}
+
+std::string ExtractFieldData(const std::string& json, const std::string& field) {
+    const std::string marker = "\"" + field + "\":{\"data\":\"";
+    const std::size_t start = json.find(marker);
+    if (start == std::string::npos) {
+        return {};
+    }
+    const std::size_t begin = start + marker.size();
+    const std::size_t end = json.find('"', begin);
+    if (end == std::string::npos) {
+        return {};
+    }
+    return json.substr(begin, end - begin);
+}
+
+TEST(MapProtocol, SerialisesEmissionGrid) {
+    map::MapFrame frame;
+    frame.type = map::MapFrameType::EmissionGrid;
+    frame.timestamp = Timestamp(1234);
+
+    map::MapEmissionGrid grid;
+    grid.south_west = GeoPoint{32.60, -85.49};
+    grid.north_east = GeoPoint{32.61, -85.48};
+    grid.cols = 2;
+    grid.rows = 2;
+    grid.fields[0].values = {1.5f, 2.5f, 3.5f, 4.5f};
+    grid.fields[0].max = 4.5f;
+    grid.fields[0].mean = 3.0f;
+    grid.fields[0].p95 = 4.4f;
+    frame.emission = grid;
+
+    const std::string json = map::ToJson(frame);
+    EXPECT_NE(json.find("\"type\":\"emission_grid\""), std::string::npos);
+    EXPECT_NE(json.find("\"unit\":\"ug/m3\""), std::string::npos);
+    EXPECT_NE(json.find("\"cols\":2"), std::string::npos);
+    EXPECT_NE(json.find("\"PM2.5\""), std::string::npos);
+
+    const std::vector<float> decoded = DecodeBase64Floats(ExtractFieldData(json, "NOx"));
+    ASSERT_EQ(decoded.size(), 4U);
+    for (std::size_t i = 0; i < decoded.size(); ++i) {
+        EXPECT_FLOAT_EQ(decoded[i], grid.fields[0].values[i]);
+    }
+}
+
+map::MapFeedConfig MakeEmissionFeedConfig() {
+    map::MapFeedConfig config = MakeFeedConfig();
+    config.emissions.enabled = true;
+    config.emissions.wind.speed_mps = 3.0;
+    config.emissions.wind.from_deg = 270.0;
+    config.emissions.puff_interval_s = 1.0;
+    config.emissions.max_age_s = 60.0;
+    config.emissions.grid_hz = 1.0;
+    config.emissions.grid.has_center = true;
+    config.emissions.grid.center_latitude = kOriginLat;
+    config.emissions.grid.center_longitude = kOriginLon;
+    config.emissions.grid.width_m = 100.0;
+    config.emissions.grid.height_m = 100.0;
+    config.emissions.grid.cell_m = 5.0;
+    return config;
+}
+
+TEST(MapFeed, EmitsEmissionGridWhenEnabled) {
+    map::MapFeed feed(MakeEmissionFeedConfig());
+    const Tracklet tracklet = MakeTracklet("cam-01", 1, ObjectType::Car,
+                                           {Timestamp(0), Timestamp(500), Timestamp(1000), Timestamp(1500),
+                                            Timestamp(2000)},
+                                           5.0);
+
+    std::size_t emission_frames = 0;
+    std::size_t max_cells = 0;
+    for (const Observation& observation : tracklet.observations) {
+        feed.Observe(tracklet, observation);
+        for (const map::MapFrame& frame : feed.Tick(observation.ts)) {
+            if (frame.type != map::MapFrameType::EmissionGrid) {
+                continue;
+            }
+            ++emission_frames;
+            ASSERT_TRUE(frame.emission.has_value());
+            EXPECT_EQ(frame.emission->cols, 20);
+            EXPECT_EQ(frame.emission->rows, 20);
+            max_cells = std::max(max_cells, frame.emission->fields[0].values.size());
+        }
+    }
+
+    EXPECT_GE(emission_frames, 2U);
+    EXPECT_EQ(max_cells, 400U);
+
+    const std::optional<map::MapFrame> snapshot = feed.EmissionSnapshot(Timestamp(2000));
+    ASSERT_TRUE(snapshot.has_value());
+    ASSERT_TRUE(snapshot->emission.has_value());
+    EXPECT_GT(snapshot->emission->fields[0].max, 0.f);
+    EXPECT_GT(snapshot->emission->north_east.latitude, snapshot->emission->south_west.latitude);
+}
+
+TEST(MapFeed, EmissionSnapshotIsNullWhenDisabled) {
+    map::MapFeed feed(MakeFeedConfig());
+    EXPECT_FALSE(feed.EmissionSnapshot(Timestamp(0)).has_value());
+}
+
+// ---------------------------------------------------------------------------
+// Emission configuration
+// ---------------------------------------------------------------------------
+
+TEST(MapConfig, LoadsEmissionSection) {
+    const TempFile config("tmcmt_map_emissions.yaml",
+                          "feed:\n"
+                          "  origin: 32.606456,-85.481891\n"
+                          "emissions:\n"
+                          "  enabled: true\n"
+                          "  stability_class: C\n"
+                          "  wind: {speed_mps: 2.5, from_deg: 180}\n"
+                          "  pm25_fraction: 0.4\n"
+                          "  grid_hz: 2\n"
+                          "  grid:\n"
+                          "    center_lat: 32.606456\n"
+                          "    center_lon: -85.481891\n"
+                          "    width_m: 300\n"
+                          "    height_m: 200\n"
+                          "    cell_m: 4\n"
+                          "cameras:\n"
+                          "  - id: cam-01\n"
+                          "    camera_id: 1\n");
+
+    auto loaded = map::LoadMapFeedConfig(config.Path());
+    ASSERT_TRUE(loaded) << loaded.status().ToString();
+    const map::MapFeedConfig& value = loaded.value();
+    EXPECT_TRUE(value.emissions.enabled);
+    EXPECT_EQ(value.emissions.stability, tmcmt::emissions::StabilityClass::C);
+    EXPECT_DOUBLE_EQ(value.emissions.wind.speed_mps, 2.5);
+    EXPECT_DOUBLE_EQ(value.emissions.wind.from_deg, 180.0);
+    EXPECT_DOUBLE_EQ(value.emissions.pm25_fraction, 0.4);
+    EXPECT_DOUBLE_EQ(value.emissions.grid_hz, 2.0);
+    EXPECT_TRUE(value.emissions.grid.has_center);
+    EXPECT_DOUBLE_EQ(value.emissions.grid.width_m, 300.0);
+    EXPECT_DOUBLE_EQ(value.emissions.grid.cell_m, 4.0);
+}
+
+TEST(MapConfig, RejectsInvalidEmissionValues) {
+    const TempFile config("tmcmt_map_bad_emissions.yaml",
+                          "feed:\n"
+                          "  origin: 32.606456,-85.481891\n"
+                          "emissions:\n"
+                          "  enabled: true\n"
+                          "  pm25_fraction: 1.5\n"
+                          "cameras:\n"
+                          "  - id: cam-01\n"
+                          "    camera_id: 1\n");
+
+    auto loaded = map::LoadMapFeedConfig(config.Path());
+    ASSERT_FALSE(loaded);
+    EXPECT_EQ(loaded.status().code(), tmcmt::ErrorCode::InvalidArgument);
+}
+
+TEST(MapConfig, RejectsUnknownStabilityClass) {
+    const TempFile config("tmcmt_map_bad_stability.yaml",
+                          "feed:\n"
+                          "  origin: 32.606456,-85.481891\n"
+                          "emissions:\n"
+                          "  enabled: true\n"
+                          "  stability_class: Q\n"
+                          "cameras:\n"
+                          "  - id: cam-01\n"
+                          "    camera_id: 1\n");
+
+    auto loaded = map::LoadMapFeedConfig(config.Path());
+    ASSERT_FALSE(loaded);
+    EXPECT_EQ(loaded.status().code(), tmcmt::ErrorCode::InvalidArgument);
 }
 
 } // namespace

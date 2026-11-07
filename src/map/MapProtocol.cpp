@@ -1,6 +1,7 @@
 #include "trafficmcmt/map/MapTypes.h"
 
 #include <cmath>
+#include <cstring>
 #include <iomanip>
 #include <sstream>
 #include <string_view>
@@ -47,6 +48,56 @@ void WriteNumber(std::ostringstream& out, double value, int precision) {
         value = 0.0;
     }
     out << std::fixed << std::setprecision(precision) << value;
+}
+
+/// Base64 of a little-endian float32 raster. The viewer decodes it into a
+/// `Float32Array` without any per-cell JSON overhead.
+std::string Base64Encode(const std::vector<float>& values) {
+    static constexpr char kAlphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+    std::vector<std::uint8_t> bytes;
+    bytes.reserve(values.size() * sizeof(float));
+    for (const float value : values) {
+        std::uint32_t bits = 0;
+        std::memcpy(&bits, &value, sizeof(bits));
+        bytes.push_back(static_cast<std::uint8_t>(bits & 0xFFu));
+        bytes.push_back(static_cast<std::uint8_t>((bits >> 8) & 0xFFu));
+        bytes.push_back(static_cast<std::uint8_t>((bits >> 16) & 0xFFu));
+        bytes.push_back(static_cast<std::uint8_t>((bits >> 24) & 0xFFu));
+    }
+
+    std::string out;
+    out.reserve((bytes.size() + 2) / 3 * 4);
+
+    std::size_t index = 0;
+    while (index + 3 <= bytes.size()) {
+        const std::uint32_t chunk = (static_cast<std::uint32_t>(bytes[index]) << 16) |
+                                    (static_cast<std::uint32_t>(bytes[index + 1]) << 8) |
+                                    static_cast<std::uint32_t>(bytes[index + 2]);
+        out.push_back(kAlphabet[(chunk >> 18) & 0x3Fu]);
+        out.push_back(kAlphabet[(chunk >> 12) & 0x3Fu]);
+        out.push_back(kAlphabet[(chunk >> 6) & 0x3Fu]);
+        out.push_back(kAlphabet[chunk & 0x3Fu]);
+        index += 3;
+    }
+
+    const std::size_t remaining = bytes.size() - index;
+    if (remaining == 1) {
+        const std::uint32_t chunk = static_cast<std::uint32_t>(bytes[index]) << 16;
+        out.push_back(kAlphabet[(chunk >> 18) & 0x3Fu]);
+        out.push_back(kAlphabet[(chunk >> 12) & 0x3Fu]);
+        out.push_back('=');
+        out.push_back('=');
+    } else if (remaining == 2) {
+        const std::uint32_t chunk = (static_cast<std::uint32_t>(bytes[index]) << 16) |
+                                    (static_cast<std::uint32_t>(bytes[index + 1]) << 8);
+        out.push_back(kAlphabet[(chunk >> 18) & 0x3Fu]);
+        out.push_back(kAlphabet[(chunk >> 12) & 0x3Fu]);
+        out.push_back(kAlphabet[(chunk >> 6) & 0x3Fu]);
+        out.push_back('=');
+    }
+
+    return out;
 }
 
 void WriteGeo(std::ostringstream& out, const GeoPoint& point) {
@@ -165,6 +216,41 @@ std::string ToJson(const MapFrame& frame) {
         }
         out << ']';
         break;
+    case MapFrameType::EmissionGrid: {
+        if (!frame.emission) {
+            out << "\"type\":\"emission_grid\",\"timestamp\":" << frame.timestamp.count()
+                << ",\"unit\":\"ug/m3\",\"fields\":{}";
+            break;
+        }
+        static constexpr const char* kNames[5] = {"NOx", "CO", "PM2.5", "PM10", "CO2"};
+        const MapEmissionGrid& grid = *frame.emission;
+        out << "\"type\":\"emission_grid\",\"timestamp\":" << frame.timestamp.count()
+            << ",\"unit\":\"ug/m3\",\"bounds\":{\"west\":";
+        WriteNumber(out, grid.south_west.longitude, 7);
+        out << ",\"south\":";
+        WriteNumber(out, grid.south_west.latitude, 7);
+        out << ",\"east\":";
+        WriteNumber(out, grid.north_east.longitude, 7);
+        out << ",\"north\":";
+        WriteNumber(out, grid.north_east.latitude, 7);
+        out << "},\"cols\":" << grid.cols << ",\"rows\":" << grid.rows << ",\"fields\":{";
+        for (std::size_t i = 0; i < grid.fields.size(); ++i) {
+            if (i != 0) {
+                out << ',';
+            }
+            const MapEmissionField& field = grid.fields[i];
+            out << '"' << kNames[i] << "\":{\"data\":\"" << Base64Encode(field.values) << "\",\"max\":";
+            WriteNumber(out, field.max, 3);
+            out << ",\"mean\":";
+            WriteNumber(out, field.mean, 3);
+            out << ",\"p95\":";
+            WriteNumber(out, field.p95, 3);
+            out << '}';
+        }
+        // The outer `ToJson` closes the frame object; only close "fields" here.
+        out << '}';
+        break;
+    }
     }
 
     out << '}';

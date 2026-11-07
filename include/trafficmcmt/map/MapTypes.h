@@ -2,6 +2,7 @@
 
 #include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -20,6 +21,7 @@ enum class MapFrameType : std::uint8_t {
     Heartbeat = 2,
     IdMerge = 3,
     TracksRemove = 4,
+    EmissionGrid = 5,
 };
 
 /// One track inside `tracks_update`.
@@ -41,6 +43,25 @@ struct MapCameraZone {
     std::array<int, 4> color{148, 163, 184, 55};
 };
 
+/// One pollutant raster inside `emission_grid`.
+struct MapEmissionField {
+    /// Row-major, south -> north, in ug/m3.
+    std::vector<float> values;
+    float max = 0.f;
+    float mean = 0.f;
+    float p95 = 0.f;
+};
+
+/// Additive protocol-v1 frame carrying the concentration map.
+struct MapEmissionGrid {
+    GeoPoint south_west{};
+    GeoPoint north_east{};
+    int cols = 0;
+    int rows = 0;
+    /// Indexed by `emissions::Pollutant`: NOx, CO, PM2.5, PM10, CO2.
+    std::array<MapEmissionField, 5> fields;
+};
+
 /// Protocol v1 frame. The JSON writer lives in `MapProtocol.cpp`.
 struct MapFrame {
     MapFrameType type = MapFrameType::TracksUpdate;
@@ -51,6 +72,7 @@ struct MapFrame {
     std::vector<std::uint64_t> removed_ids;
     std::uint64_t old_id = 0;
     std::uint64_t new_id = 0;
+    std::optional<MapEmissionGrid> emission;
 };
 
 /// Viewer class name for a protocol object type (`person`, not `pedestrian`).

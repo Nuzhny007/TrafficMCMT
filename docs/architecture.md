@@ -192,13 +192,16 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `FlowAssociator`, `GlobalIdManager` | muSSP (opt.), Eigen |
 | `trafficmcmt_bev` | `HomographyProjector`, `WorldTrajectoryFusion` | OpenCV core, Eigen |
 | `trafficmcmt_net` | `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink` | libzmq/cppzmq, protobuf |
+| `trafficmcmt_map` | `MapConfig`, `MapFeed`, `MapProtocol`, `TrackletTimeline`, `VelocityEstimator`, `TrailBuilder`, `MapIdRegistry` | core, yaml-cpp |
+| `trafficmcmt_emissions` | `EmissionSimulator`, `HbefaEmissionModel`, `PasquillGifford`, `GaussianPuffModel`, `ConcentrationGrid` | core |
 | `trafficmcmt_pipeline` | `MasterPipeline`, `WindowScheduler` | все выше |
 | `trafficmcmt_mtt` | `MttTrackAdapter` | **MTTracking::mtracking**, OpenCV |
 | `trafficmcmt_metrics` | `MotMetrics`, `Evaluator` | core |
 
 Приложения Этапа 2: `trafficmcmt_mtt_export` (видео → треклеты; единственный таргет,
 линкующий `MTTracking::mdetection`) и `trafficmcmt_tracklet_inspect` (статистика и
-JSON-дамп треклетов).
+JSON-дамп треклетов). Этап 2b/2c добавляет `trafficmcmt_map_export` (треклеты →
+JSONL-кадры v1) и `trafficmcmt_map_gateway` (WebSocket-реплей кадров и выбросов).
 
 ### 6.1. Публичный контракт
 
@@ -441,6 +444,132 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
 (без pacing) и `--frames-out` для отладки. `/health` возвращает
 `{"status":"ok","protocol":1,"active_tracks":N}`.
 
+### 7.7. Gaussian puff: выбросы и концентрации (Этап 2c)
+
+Модуль `trafficmcmt_emissions` превращает треки `MapFeed` в карту приземных
+концентраций пяти загрязнителей. Он не знает про транспорт: его двигает
+`MapFeed::Tick`, а тесты — синтетическими источниками. MTT/OpenCV/CUDA не
+участвуют, правило ADR-001 сохраняется.
+
+```
+MapFeed::Tick (10 Гц)
+   │  TrackState{position, velocity, acceleration}
+   ▼
+EmissionSimulator (trafficmcmt_emissions)
+   │  Step(): спавн puff'ов (puff_interval_s), адвекция, старение
+   │  BuildSnapshot(): растеризация ConcentrationGrid (grid_hz)
+   ▼
+MapFrame{EmissionGrid} ──> MapProtocol ──> WebSocket ──> viewer
+```
+
+**Компоненты.**
+
+| Компонент | Назначение |
+|---|---|
+| `EmissionTypes` | `Pollutant` (NOx, CO, PM2.5, PM10, CO2), `EmissionRates` (г/с), `EmissionSource`, `EmissionFieldStats` |
+| `IEmissionModel` | интерфейс модели: класс + скорость + ускорение → ставки г/с |
+| `HbefaEmissionModel` | порт HBEFA из SUMO, 3 класса; см. `docs/emissions-attribution.md` |
+| `PasquillGifford` | `σ_y = a·x^b`, `σ_z = c·x^d` для классов A–F |
+| `GaussianPuffModel` | `PuffState`, адвекция, `ComputePuffGeometry`, `ConcentrationAt` |
+| `ConcentrationGrid` | регулярная ENU-сетка, `AddPuff`, `Stats` |
+| `EmissionConfig` | секция `emissions:` в `map_feed.yaml` |
+| `EmissionSimulator` | население puff'ов, спавн, снапшоты |
+
+**Физика.**
+
+- Ветер задан метеорологическим направлением `from_deg` (0° — с севера,
+  90° — с востока); вектор адвекции направлен противоположно.
+- Puff движется аналитически: `center = origin + wind_vector · age`, без
+  накопления ошибки.
+- Аргумент коэффициентов — пройденный по ветру путь
+  `x = max(wind_speed, 0.3 м/с) · age` в **метрах**; `σ_x = σ_y`.
+- Концентрация в точке (`g/m³`):
+
+  ```
+  C = M / ((2π)^1.5 · σx·σy·σz)
+      · exp(-Δx²/(2σx²) - Δy²/(2σy²))
+      · [exp(-(z-H)²/(2σz²)) + exp(-(z+H)²/(2σz²))]
+  ```
+
+  где `M` — масса puff'а, `H` — высота источника, второе слагаемое —
+  отражение от земли. Наблюдение ведётся на высоте дыхания `z = 1.5 м`.
+- Масса puff'а: `M = rate_gps · puff_interval_s`; пуфы старше `max_age_s`
+  удаляются, при переполнении — самые старые.
+- `PM2.5 = PMx · pm25_fraction` (по умолчанию 0.5), `PM10 = PMx`.
+
+**Модель выбросов.** Класс трека отображается в строку HBEFA:
+
+| `class` | HBEFA |
+|---|---|
+| `car`, `unknown` | `SVE_P_LDV_7_7` |
+| `truck`, `bus` | `SVE_HDV_6_6` |
+| `motorbike` | `SVE_P_LDV_7_1` |
+| `bike`, `person` | нулевые ставки |
+
+Ускорение берётся из `AccelerationEstimator` (МНК по окну
+`acceleration_window_s`, EMA, кламп `±acceleration_max_mps2`). Отрицательное
+ускорение по умолчанию клампится к нулю (`clamp_negative_acceleration`), иначе
+карта «рвётся» при торможении. Скорость в `Rates` ограничена 130 км/ч.
+
+**Сетка.** Прямоугольник `width_m × height_m` с шагом `cell_m` (по умолчанию
+600×450 м, 5 м → 120×90), центр — `emissions.grid.center_*` или ENU-origin.
+Чтобы puff не «проваливался» между узлами, в `ConcentrationGrid::AddPuff`
+сигмы клампятся снизу к половине ячейки (`σ_x ≥ 0.5·cell_x`,
+`σ_y ≥ 0.5·cell_y`, `σ_z ≥ 0.5·max(cell_x, cell_y)`), после чего
+`inverse_norm` пересчитывается. `Stats()` даёт `max`, `mean` по всей сетке и
+`p95` только по ненулевым ячейкам (иначе фон из нулей занижает перцентиль).
+
+**Протокол.** Аддитивное расширение v1 — кадр `emission_grid`:
+
+```json
+{
+  "type": "emission_grid",
+  "timestamp": 1793776800000,
+  "unit": "ug/m3",
+  "bounds": {"west": 5.97, "south": 45.52, "east": 5.98, "north": 45.53},
+  "cols": 120,
+  "rows": 90,
+  "fields": {
+    "NOx": {"data": "<base64 f32 LE>", "max": 719.0, "mean": 1.2, "p95": 169.0}
+  }
+}
+```
+
+`data` — row-major `float32` little-endian, строки с юга на север, длина
+ровно `cols × rows`. Все пять полей присутствуют всегда. Кадры идут с
+частотой `grid_hz` (1 Гц); `map_gateway` дополнительно отправляет последний
+снапшот новому клиенту после `camera_zones` и `tracks_update`-снапшота.
+Viewer рисует поле через `BitmapLayer` с логарифмической палитрой на каждый
+загрязнитель.
+
+**Конфигурация.**
+
+```yaml
+emissions:
+  enabled: true
+  stability_class: D
+  wind:
+    speed_mps: 3.0
+    from_deg: 270
+  source_height_m: 0.5
+  breathing_height_m: 1.5
+  puff_interval_s: 1.0
+  max_age_s: 180
+  max_puffs: 3000
+  pm25_fraction: 0.5
+  grid_hz: 1.0
+  clamp_negative_acceleration: true
+  grid:
+    center_lat: 45.52724575
+    center_lon: 5.97433625
+    width_m: 600
+    height_m: 450
+    cell_m: 5
+```
+
+`enabled: false` или отсутствие секции полностью отключают симулятор —
+`MapFeed` не тратит время на puff'ы и не отправляет `emission_grid`.
+
 ## 8. Алгоритмические решения
 
 ### 8.1. Стоимость связи треклетов
@@ -507,6 +636,7 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | ADR-006 | Скользящее окно + `commit_lag` | компромисс latency/качество, стабильные ID | полный offline, чистый online-greedy |
 | ADR-007 | Геопривязка в `trafficmcmt_edge`, не в Master | Edge знает калибровку и кадры; Master получает готовые метры | проекция в Master по `CameraCalibration` |
 | ADR-008 | ReID по типу объекта с отдельными `model_id` | пешеходы и транспорт требуют разных моделей; `model_id` защищает от смешивания | единая модель для всех типов |
+| ADR-009 | HBEFA-таблица портирована в `trafficmcmt_emissions` с атрибуцией | расчёт сверяем с эталоном SUMO построчно, модуль не тянет GPL-код сборки | своя калибровка; отдельный GPL-модуль (см. `docs/emissions-attribution.md`) |
 
 ## 12. Глоссарий
 
@@ -519,6 +649,7 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | **MCF** | Minimum Cost Flow, глобальная ассоциация |
 | **Global ID** | идентификатор объекта, сквозной для всех камер |
 | **Watermark** | граница «всё, что старше — можно обрабатывать» в потоке с переупорядочиванием |
+| **Puff** | порция выброса фиксированной массы, движущаяся с ветром и расширяющаяся по Гауссу |
 
 ## 13. Статус реализации
 
@@ -529,9 +660,9 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | 3. Топология | ✅ зафиксировано |
 | 4. Потоки данных | ✅ зафиксировано |
 | 5. Режимы | ✅ зафиксировано |
-| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `mtt` реализованы; остальные — план |
-| 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу |
+| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `map`, `net`, `emissions` реализованы; остальные — план |
+| 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу; §7.7 — `emission_grid` |
 | 8. Алгоритмы | 🟡 `GeoBinding` (метры) готов; st-ReID и MCF — Этапы 3–5 |
 | 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 84 unit-теста (протокол, geo, type-aware ReID), smoke на `aire` и Auburn; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 155 unit-тестов (протокол, geo, type-aware ReID, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
 | 11. ADR | ✅ |

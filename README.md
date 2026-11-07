@@ -12,6 +12,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | топология, потоки данных, протокол, алгоритмы, ADR |
 | [`docs/roadmap.md`](docs/roadmap.md) | этапы, DoD, тесты, оценки, реестр рисков |
+| [`docs/emissions-attribution.md`](docs/emissions-attribution.md) | происхождение HBEFA-таблицы, лицензии |
 
 Оба документа — **живые спецификации**: обновляются вместе с кодом.
 
@@ -23,6 +24,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 | 2. Протокол и файловый I/O | ✅ готов |
 | 2a. Тестовый пример на реальных видео (Aire, Auburn) | ✅ готов |
 | 2b. Карта и viewer-фид (WebSocket v1) | ✅ готов |
+| 2c. Gaussian puff: выбросы и концентрации | ✅ готов |
 | 3. FAISS и ReID | ⬜ |
 | 4. st-ReID | ⬜ |
 | 5. muSSP и глобальная ассоциация | ⬜ |
@@ -122,6 +124,11 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
 `--duration`, `--frames-out`; `/health` отдаёт JSON со счётчиком активных треков.
 Одиночная камера Aire: `configs/map_feed_aire.yaml`.
 
+Выбросы и концентрации (Этап 2c) считаются тем же `map_gateway`: при включённой
+секции `emissions:` он раз в секунду шлёт кадр `emission_grid` (NOx, CO, PM2.5,
+PM10, CO2 в мкг/м³). Модель — HBEFA + Gaussian puff, происхождение таблицы и
+лицензии описаны в [`docs/emissions-attribution.md`](docs/emissions-attribution.md).
+
 ## Структура
 
 ```
@@ -131,8 +138,9 @@ include/trafficmcmt/edge/   ReID-экстракторы, EdgeTrackExporter, GeoB
 include/trafficmcmt/mtt/    адаптер Multitarget-tracker → Observation
 include/trafficmcmt/map/    MapFeed, MapProtocol, MapConfig, timeline, velocity, trail
 include/trafficmcmt/net/    WebSocket-сервер/клиент (RFC 6455, без зависимостей)
+include/trafficmcmt/emissions/  HBEFA, Pasquill-Gifford, Gaussian puff, сетка концентраций
 proto/                      protobuf-схемы v1 (tracklet, calibration)
-src/                        реализации core/io/edge/mtt/map/net
+src/                        реализации core/io/edge/mtt/map/net/emissions
 apps/master_node/           точка входа Master
 apps/mtt_export/            видео → треклеты (Edge, OpenCV + MTT)
 apps/map_export/            треклеты → JSONL-кадры протокола v1
