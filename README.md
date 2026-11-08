@@ -12,6 +12,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 |---|---|
 | [`docs/architecture.md`](docs/architecture.md) | топология, потоки данных, протокол, алгоритмы, ADR |
 | [`docs/roadmap.md`](docs/roadmap.md) | этапы, DoD, тесты, оценки, реестр рисков |
+| [`docs/reid-eval.md`](docs/reid-eval.md) | протокол оценки ReID, схема manifest, формулы CMC/mAP |
 | [`docs/emissions-attribution.md`](docs/emissions-attribution.md) | происхождение HBEFA-таблицы, лицензии |
 
 Оба документа — **живые спецификации**: обновляются вместе с кодом.
@@ -25,7 +26,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 | 2a. Тестовый пример на реальных видео (Aire, Auburn) | ✅ готов |
 | 2b. Карта и viewer-фид (WebSocket v1) | ✅ готов |
 | 2c. Gaussian puff: выбросы и концентрации | ✅ готов |
-| 3. FAISS и ReID | ⬜ |
+| 3. FAISS и ReID | 🟡 индекс/галереи/матчер и оценка готовы; FAISS не проверен |
 | 4. st-ReID | ⬜ |
 | 5. muSSP и глобальная ассоциация | ⬜ |
 | 6. ZeroMQ транспорт | ⬜ |
@@ -42,6 +43,8 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
   что и TrafficMCMT, против той же версии OpenCV, с
   `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`, `USE_OCV_EMBEDDINGS=OFF`
 - spdlog, yaml-cpp, GoogleTest (находятся через `find_package`, иначе — `FetchContent`)
+- Eigen 3 для ReID (`find_package`, иначе `FetchContent` 3.4.0)
+- FAISS — опционально, `TRAFFICMCMT_WITH_FAISS=ON`; без него используется `BruteForceIndex`
 
 Локальная сборка MTT (путь по умолчанию для `CMakeUserPresets.json`):
 
@@ -129,6 +132,27 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
 PM10, CO2 в мкг/м³). Модель — HBEFA + Gaussian puff, происхождение таблицы и
 лицензии описаны в [`docs/emissions-attribution.md`](docs/emissions-attribution.md).
 
+ReID: индекс, галереи и оценка (Этап 3):
+
+```powershell
+# chunk-split: чётные sequence -> галерея, нечётные -> запросы
+.\build\local-release\Release\trafficmcmt_reid_eval.exe `
+  --tracklets build\datasets\aire\cam-01.jsonl
+
+# внешний размеченный сплит (JSONL, см. docs/reid-eval.md)
+.\build\local-release\Release\trafficmcmt_reid_eval.exe `
+  --manifest build\reid\manifest.jsonl --json
+
+# латентность/QPS/recall индекса
+.\build\local-release\Release\trafficmcmt_reid_bench.exe `
+  --vectors 200000 --dim 512 --queries 200 --k 10 --index brute --json
+```
+
+Модуль `trafficmcmt_reid` — CPU-only (`core` + Eigen), не линкует OpenCV,
+protobuf или MTT. `TRAFFICMCMT_WITH_FAISS=OFF` — рабочая конфигурация на
+`BruteForceIndex`; запрос `faiss_*` в такой сборке возвращает `Unsupported`.
+Протокол оценки, формулы и ограничения — в [`docs/reid-eval.md`](docs/reid-eval.md).
+
 ## Структура
 
 ```
@@ -139,18 +163,21 @@ include/trafficmcmt/mtt/    адаптер Multitarget-tracker → Observation
 include/trafficmcmt/map/    MapFeed, MapProtocol, MapConfig, timeline, velocity, trail
 include/trafficmcmt/net/    WebSocket-сервер/клиент (RFC 6455, без зависимостей)
 include/trafficmcmt/emissions/  HBEFA, Pasquill-Gifford, Gaussian puff, сетка концентраций
+include/trafficmcmt/reid/   IEmbeddingIndex, BruteForceIndex, FaissIndex, GalleryManager, ReIdMatcher
 proto/                      protobuf-схемы v1 (tracklet, calibration)
-src/                        реализации core/io/edge/mtt/map/net/emissions
+src/                        реализации core/io/edge/mtt/map/net/emissions/reid
 apps/master_node/           точка входа Master
 apps/mtt_export/            видео → треклеты (Edge, OpenCV + MTT)
 apps/map_export/            треклеты → JSONL-кадры протокола v1
 apps/map_gateway/           WebSocket-реплей кадров для viewer
 apps/tracklet_inspect/      инспектор треклетов
+apps/reid_eval/             CMC/Rank-1/mAP (chunk-split и manifest)
+apps/reid_bench/            латентность, QPS, recall@k индекса
 tests/unit/                 unit-тесты (GTest)
 configs/                    примеры конфигурации (включая map_feed*.yaml)
 cmake/                      зависимости, warnings, runtime-DLL, package config
-docs/                       архитектура и roadmap
-scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway
+docs/                       архитектура, roadmap, оценка ReID
+scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway, reid_eval_*
 ```
 
 Viewer (`traffic-mcmt-viewer`) — отдельный репозиторий: React + deck.gl + MapLibre,

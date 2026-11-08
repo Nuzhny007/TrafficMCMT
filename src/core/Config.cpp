@@ -290,6 +290,12 @@ Status ParseReId(const YAML::Node& root, ReIdConfig& out) {
     if (!(status = ReadScalar(node, "top_k", out.top_k, "reid")).ok()) {
         return status;
     }
+    if (!(status = ReadScalar(node, "min_similarity", out.min_similarity, "reid")).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "exclude_same_camera", out.exclude_same_camera, "reid")).ok()) {
+        return status;
+    }
     if (!(status = ReadScalar(node, "whitening", out.whitening, "reid")).ok()) {
         return status;
     }
@@ -652,6 +658,9 @@ Status MasterConfig::Validate() const {
     if (reid.nprobe <= 0 || reid.nprobe > reid.nlist) {
         return fail("reid.nprobe", "must be > 0 and <= reid.nlist");
     }
+    if (reid.min_similarity < -1.0 || reid.min_similarity > 1.0) {
+        return fail("reid.min_similarity", "must be in [-1, 1]");
+    }
 
     if (st.min_transition_ms < 0) {
         return fail("st.min_transition_ms", "must be >= 0");
@@ -783,6 +792,8 @@ std::string Dump(const MasterConfig& config) {
     root["reid"]["nlist"] = config.reid.nlist;
     root["reid"]["nprobe"] = config.reid.nprobe;
     root["reid"]["top_k"] = config.reid.top_k;
+    root["reid"]["min_similarity"] = config.reid.min_similarity;
+    root["reid"]["exclude_same_camera"] = config.reid.exclude_same_camera;
     root["reid"]["whitening"] = config.reid.whitening;
     root["reid"]["quantize_embeddings"] = config.reid.quantize_embeddings;
 

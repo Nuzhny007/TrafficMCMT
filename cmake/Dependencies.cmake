@@ -54,6 +54,29 @@ else()
 endif()
 
 # ---------------------------------------------------------------------------
+# Eigen 3 (ReID index; header-only)
+# ---------------------------------------------------------------------------
+# Eigen is the only numeric dependency of the ReID module. Prefer an installed
+# package (vcpkg / distro) and fall back to FetchContent so that the CPU-only
+# CI runners build without extra setup.
+find_package(Eigen3 3.3 CONFIG QUIET)
+if(NOT Eigen3_FOUND)
+    message(STATUS "TrafficMCMT: Eigen3 not found, fetching 3.4.0")
+    set(EIGEN_BUILD_DOC       OFF CACHE BOOL "" FORCE)
+    set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING         OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(eigen
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        GIT_TAG        3.4.0
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(eigen)
+endif()
+
+if(NOT TARGET Eigen3::Eigen)
+    message(FATAL_ERROR "TrafficMCMT: Eigen3::Eigen target not found after find_package/FetchContent")
+endif()
+
+# ---------------------------------------------------------------------------
 # GoogleTest (tests only)
 # ---------------------------------------------------------------------------
 if(TRAFFICMCMT_BUILD_TESTS)

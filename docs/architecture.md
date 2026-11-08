@@ -187,7 +187,7 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | `trafficmcmt_proto` | сгенерированные `tracklet.pb.*`, `calibration.pb.*` | protobuf |
 | `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `TrackletNormalizer`, `InMemoryTrackletStore`, `JsonlTrackletSink`, `BinaryTrackletSink` | protobuf |
 | `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `TypeAwareReIdExtractor`, `GeoBinding`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn, calib3d) |
-| `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
+| `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
 | `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer` | core, Eigen |
 | `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `FlowAssociator`, `GlobalIdManager` | muSSP (opt.), Eigen |
 | `trafficmcmt_bev` | `HomographyProjector`, `WorldTrajectoryFusion` | OpenCV core, Eigen |
@@ -202,6 +202,8 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 линкующий `MTTracking::mdetection`) и `trafficmcmt_tracklet_inspect` (статистика и
 JSON-дамп треклетов). Этап 2b/2c добавляет `trafficmcmt_map_export` (треклеты →
 JSONL-кадры v1) и `trafficmcmt_map_gateway` (WebSocket-реплей кадров и выбросов).
+Этап 3 добавляет `trafficmcmt_reid_eval` (CMC/Rank-1/mAP) и `trafficmcmt_reid_bench`
+(латентность и recall индекса).
 
 ### 6.1. Публичный контракт
 
@@ -601,6 +603,108 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 замораживается; слияние оформляется `GlobalIdMergeEvent{old_id, new_id, reason, ts}`;
 закоммиченный ID не переиспользуется.
 
+### 8.4. ReID-индекс, галереи и метрики
+
+Модуль `trafficmcmt_reid` — CPU-only: `trafficmcmt_core` + Eigen 3. Он не линкует
+OpenCV, protobuf или Multitarget-tracker, поэтому собирается в CI-конфигурации
+`EDGE=OFF, MTT=OFF, PROTOBUF=OFF`.
+
+**Индекс эмбеддингов.** `IEmbeddingIndex`:
+
+```cpp
+Status Add(TrackletId, std::span<const float>);
+Status Remove(TrackletId);                 // NotFound для неизвестного id
+Status Rebuild(std::span<const IndexEntry>); // атомарная замена + переобучение IVF
+Result<std::vector<SearchHit>> Search(query, k[, filter]);
+```
+
+- `SearchHit{id, score}`, `score` — inner product; для L2-нормированных векторов это
+  косинус. Сортировка по убыванию score, при равенстве — по возрастанию `id`
+  (детерминизм).
+- `BruteForceIndex` хранит row-major матрицу `N×dim`, считает `N×dim` на `dim`
+  через Eigen и выбирает top-K через `partial_sort` (O(N log k)). При `N ≥ 20 000`
+  скан делится на блоки строк и выполняется в нескольких потоках
+  (`EmbeddingIndexOptions::threads`, 0 — эвристика, 1 — выключено).
+- `Add` заменяет вектор с тем же id; `Remove` — swap-with-last, поэтому остальные
+  результаты не меняются. `Rebuild` сначала валидирует весь батч и только потом
+  подменяет содержимое: битая запись не портит рабочий индекс.
+- `CreateEmbeddingIndex(kind, options)` — фабрика. При
+  `TRAFFICMCMT_WITH_FAISS=OFF` запрос `faiss_flat/faiss_ivf_pq/faiss_hnsw`
+  возвращает `Unsupported` с явным сообщением, а не тихий fallback на brute force.
+- `FaissIndex` (`IndexFlatIP`, `IndexIVFPQ`, `IndexHNSWFlat` + `IndexIDMap2`)
+  компилируется только при `TRAFFICMCMT_WITH_FAISS=ON`; на машине разработки
+  пакет FAISS не установлен, поэтому бэкенд не проверялся. IVF обучается в
+  `Rebuild`; до обучения `Add` складывает векторы в буфер, а `Search` сканирует
+  его линейно. `nlist` уменьшается до числа обучающих векторов, `nprobe`
+  ограничивается `nlist`.
+
+**Нормализация.** `EmbeddingNormalizer` применяет `y = W·(x − mean)` и L2.
+Артефакт (little-endian, IEEE-754):
+
+```
+char[8]  "TMCMTWN1"
+uint32   in_dim
+uint32   out_dim
+float    mean[in_dim]
+float    matrix[out_dim * in_dim]   // row-major
+```
+
+`out_dim == in_dim` — whitening, `out_dim < in_dim` — PCA. `Save`/`Load`
+проверяют магию, размеры, конечность значений и отсутствие хвоста файла.
+
+**Галерея.** `GalleryManager` — авторитетное хранилище метаданных и векторов;
+индекс — производная структура. Это позволяет точно удалять и вытеснять записи
+на любом бэкенде. `GalleryEntry` содержит `camera`, `type`, `model_id`,
+`begin/end`, `quality`, `values`.
+
+- `Add(const Tracklet&)` / `Add(const GalleryEntry&)`, `Remove`, `Clear`.
+- `Evict(now)` удаляет записи с `end < now − retention_ms`; `retention_ms == 0`
+  отключает вытеснение. Индекс `end → id` упорядочен, поэтому свип не сканирует
+  всю галерею.
+- Камеры хранятся в отдельных bucket-множествах: `exclude_same_camera` и
+  `camera`-фильтр не требуют сравнения строк на каждого кандидата.
+- `GalleryQuery`: `top_k`, `query_camera`, `exclude_same_camera`, `exclude_id`,
+  `camera`, `from/to` (пересечение интервалов), `type`, `model_id`,
+  `min_similarity`. Фильтр применяется до top-K, поэтому `top_k` — это уже
+  отфильтрованный результат.
+
+**Матчер.** `ReIdMatcher` превращает hits в пары для spatio-temporal этапа:
+
+```
+c_app = clamp(1 − similarity, 0, 2)
+```
+
+Отсекаются self (`exclude_id`), кандидаты с другим `model_id` (дескрипторы
+разных моделей несравнимы), кандидаты ниже `reid.min_similarity` и, по
+умолчанию, треклеты своей камеры (`reid.exclude_same_camera`).
+
+**Оценка.** `apps/reid_eval` поддерживает два режима:
+
+- `--tracklets` — chunk-split наших треклетов. Идентичность —
+  `(session_id, camera, local_track_id)`; чанки с чётным `sequence` попадают в
+  галерею, с нечётным — в запросы. Это проверяет согласованность дескриптора
+  внутри трека, а не кросс-камерный ReID.
+- `--manifest` — внешний размеченный JSONL:
+  `{id, identity, camera, model_id, split: "gallery"|"query", embedding:[...]}`.
+
+Метрики: CMC (Rank-1/5/10) и mAP@R, где `R` — число галерейных чанков той же
+идентичности; `AP = (Σ precision@i · rel(i)) / R`. Запросы без галерейной
+идентичности пропускаются и считаются в `skipped`.
+
+`apps/reid_bench` генерирует детерминированные единичные векторы, строит индекс,
+измеряет `steady_clock` на каждом запросе и печатает p50/p95/p99, QPS и
+recall@k относительно точного скана. Google Benchmark не используется.
+
+Локальный замер (Windows, Release, 8 потоков):
+
+| Индекс | Векторы × dim | Запросы | p50 | p95 | p99 | QPS | recall@10 |
+|---|---|---|---|---|---|---|---|
+| `brute` | 200 000 × 512 | 200 | 12.6 мс | 14.9 мс | 16.2 мс | 77.8 | 1.0 |
+
+Brute force упирается в память: один запрос читает `N·dim·4` байт (410 МБ при
+200k×512). Цель p99 < 20 мс на 1M×512 достигается только приближённым индексом
+(`faiss_ivf_pq`), а не точным сканом.
+
 ## 9. Нефункциональные требования
 
 | Требование | Цель |
@@ -637,6 +741,7 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | ADR-007 | Геопривязка в `trafficmcmt_edge`, не в Master | Edge знает калибровку и кадры; Master получает готовые метры | проекция в Master по `CameraCalibration` |
 | ADR-008 | ReID по типу объекта с отдельными `model_id` | пешеходы и транспорт требуют разных моделей; `model_id` защищает от смешивания | единая модель для всех типов |
 | ADR-009 | HBEFA-таблица портирована в `trafficmcmt_emissions` с атрибуцией | расчёт сверяем с эталоном SUMO построчно, модуль не тянет GPL-код сборки | своя калибровка; отдельный GPL-модуль (см. `docs/emissions-attribution.md`) |
+| ADR-010 | Галерея хранит авторитетные векторы, индекс — производная структура | точные `Remove`/`Evict`/`Rebuild` на любом бэкенде, включая приближённый FAISS | удалять только из индекса и доверять его `remove_ids` |
 
 ## 12. Глоссарий
 
@@ -660,9 +765,9 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | 3. Топология | ✅ зафиксировано |
 | 4. Потоки данных | ✅ зафиксировано |
 | 5. Режимы | ✅ зафиксировано |
-| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `map`, `net`, `emissions` реализованы; остальные — план |
+| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `map`, `net`, `emissions` реализованы; остальные — план |
 | 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу; §7.7 — `emission_grid` |
-| 8. Алгоритмы | 🟡 `GeoBinding` (метры) готов; st-ReID и MCF — Этапы 3–5 |
+| 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер готовы; st-ReID и MCF — Этапы 4–5 |
 | 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 156 unit-тестов (протокол, geo, type-aware ReID, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 195 unit-тестов (протокол, geo, type-aware ReID, reid, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
 | 11. ADR | ✅ |

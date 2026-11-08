@@ -70,6 +70,8 @@ reid:
   nlist: 128
   nprobe: 8
   top_k: 7
+  min_similarity: 0.35
+  exclude_same_camera: false
   whitening: data/whitening.bin
 
 st:
@@ -137,6 +139,8 @@ TEST(Config, LoadsFullConfiguration) {
     EXPECT_EQ(config.reid.nlist, 128);
     EXPECT_EQ(config.reid.nprobe, 8);
     EXPECT_EQ(config.reid.top_k, 7);
+    EXPECT_DOUBLE_EQ(config.reid.min_similarity, 0.35);
+    EXPECT_FALSE(config.reid.exclude_same_camera);
     EXPECT_EQ(config.reid.whitening, "data/whitening.bin");
 
     EXPECT_EQ(config.st.min_transition_ms, 100);
@@ -186,6 +190,8 @@ TEST(Config, AppliesDefaultsWhenSectionsAreMissing) {
     EXPECT_EQ(config.ingest.file.path, "data/tracklets.jsonl");
     EXPECT_EQ(config.reid.index, IndexKind::Brute);
     EXPECT_EQ(config.reid.embedding_dim, 512);
+    EXPECT_DOUBLE_EQ(config.reid.min_similarity, 0.0);
+    EXPECT_TRUE(config.reid.exclude_same_camera);
     EXPECT_EQ(config.st.gate.mode, GateMode::Off);
     EXPECT_EQ(config.flow.solver, SolverKind::Ssp);
     EXPECT_EQ(config.storage.backend, "memory");
@@ -229,6 +235,14 @@ TEST(Config, RejectsUnknownSolver) {
     auto result = MasterConfig::Load(file.Path());
     ASSERT_FALSE(result);
     EXPECT_NE(result.status().message().find("flow.solver"), std::string::npos);
+}
+
+TEST(Config, RejectsSimilarityOutsideCosineRange) {
+    const TempFile file("reid:\n  min_similarity: 1.5\n");
+    auto result = MasterConfig::Load(file.Path());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.status().code(), tmcmt::ErrorCode::InvalidArgument);
+    EXPECT_NE(result.status().message().find("reid.min_similarity"), std::string::npos);
 }
 
 TEST(Config, RejectsEmptyFileList) {
@@ -278,6 +292,8 @@ TEST(Config, DumpRoundTrips) {
     EXPECT_EQ(a.ingest.zmq.endpoint, b.ingest.zmq.endpoint);
     EXPECT_EQ(a.reid.index, b.reid.index);
     EXPECT_EQ(a.reid.embedding_dim, b.reid.embedding_dim);
+    EXPECT_DOUBLE_EQ(a.reid.min_similarity, b.reid.min_similarity);
+    EXPECT_EQ(a.reid.exclude_same_camera, b.reid.exclude_same_camera);
     EXPECT_EQ(a.st.gate.mode, b.st.gate.mode);
     EXPECT_DOUBLE_EQ(a.st.weights.appearance, b.st.weights.appearance);
     EXPECT_EQ(a.flow.solver, b.flow.solver);

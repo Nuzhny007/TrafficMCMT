@@ -77,9 +77,40 @@ target_link_libraries(trafficmcmt_emissions
 tmcmt_set_warnings(trafficmcmt_emissions)
 
 # ---------------------------------------------------------------------------
+# ReID: embedding index, gallery and matcher (CPU-only, Eigen).
+# Never links OpenCV, protobuf or the Multitarget-tracker.
+# ---------------------------------------------------------------------------
+add_library(trafficmcmt_reid STATIC
+    src/reid/BruteForceIndex.cpp
+    src/reid/EmbeddingIndex.cpp
+    src/reid/EmbeddingNormalizer.cpp
+    src/reid/GalleryManager.cpp
+    src/reid/ReIdMatcher.cpp)
+add_library(TrafficMCMT::reid ALIAS trafficmcmt_reid)
+
+target_link_libraries(trafficmcmt_reid
+    PUBLIC
+        trafficmcmt_core
+        Eigen3::Eigen)
+tmcmt_set_warnings(trafficmcmt_reid)
+
+if(TRAFFICMCMT_WITH_FAISS)
+    target_sources(trafficmcmt_reid PRIVATE src/reid/FaissIndex.cpp)
+    target_compile_definitions(trafficmcmt_reid PUBLIC TMCMT_WITH_FAISS=1)
+    if(TARGET faiss::faiss)
+        target_link_libraries(trafficmcmt_reid PRIVATE faiss::faiss)
+    elseif(TARGET faiss)
+        target_link_libraries(trafficmcmt_reid PRIVATE faiss)
+    else()
+        message(WARNING "TrafficMCMT: FAISS found but no import target -> disabling FAISS")
+        set(TRAFFICMCMT_WITH_FAISS OFF CACHE BOOL "" FORCE)
+    endif()
+endif()
+
+# ---------------------------------------------------------------------------
 # Protocol: generated protobuf messages (stage 2).
 # ---------------------------------------------------------------------------
-set(TMCMT_INSTALL_TARGETS trafficmcmt_core trafficmcmt_emissions)
+set(TMCMT_INSTALL_TARGETS trafficmcmt_core trafficmcmt_emissions trafficmcmt_reid)
 
 if(TRAFFICMCMT_WITH_PROTOBUF)
     set(TMCMT_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
@@ -247,6 +278,23 @@ if(TARGET trafficmcmt_map)
         tmcmt_set_warnings(trafficmcmt_map_gateway)
         tmcmt_copy_runtime_dependencies(trafficmcmt_map_gateway)
     endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# ReID applications
+# ---------------------------------------------------------------------------
+add_executable(trafficmcmt_reid_bench apps/reid_bench/main.cpp)
+target_link_libraries(trafficmcmt_reid_bench PRIVATE trafficmcmt_reid)
+tmcmt_set_warnings(trafficmcmt_reid_bench)
+
+if(TARGET trafficmcmt_io)
+    add_executable(trafficmcmt_reid_eval apps/reid_eval/main.cpp)
+    target_link_libraries(trafficmcmt_reid_eval
+        PRIVATE
+            trafficmcmt_io
+            trafficmcmt_reid)
+    tmcmt_set_warnings(trafficmcmt_reid_eval)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_reid_eval)
 endif()
 
 # ---------------------------------------------------------------------------

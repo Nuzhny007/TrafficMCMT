@@ -13,7 +13,7 @@
 | 2a | Тестовый пример: реальные видео | 2–3 | ✅ | 2 |
 | 2b | Карта и viewer-фид (WebSocket v1) | 3–5 | ✅ | 2, 2a |
 | 2c | Gaussian puff: выбросы и концентрации | 4–6 | ✅ | 2b |
-| 3 | FAISS и базовый ReID | 7–10 | ⬜ | 2 |
+| 3 | FAISS и базовый ReID | 7–10 | 🟡 | 2 |
 | 4 | st-ReID (Camera Link Model) | 8–12 | ⬜ | 2, 3 |
 | 5 | muSSP и глобальная ассоциация | 10–14 | ⬜ | 3, 4 |
 | 6 | ZeroMQ транспорт | 6–8 | ⬜ | 2 |
@@ -338,34 +338,102 @@ Viewer: `npm run dev`, кадры `emission_grid` приходят с часто
 
 ---
 
-## Этап 3. FAISS и базовый ReID (7–10 дней) ⬜
+## Этап 3. FAISS и базовый ReID (7–10 дней) 🟡
 
 **Цель:** top-K похожих треклетов с других камер; измеримое качество ReID.
 
 ### Задачи
 
-- [ ] `IEmbeddingIndex` (`Add`, `Search`, `Remove`, `Rebuild`)
-- [ ] `BruteForceIndex` (Eigen) — эталон и дефолт для малых сессий
-- [ ] `FaissIndex` — `FLAT_IP`, `IVF_PQ`, `HNSW32`; `nlist`/`nprobe` из конфига
-- [ ] `EmbeddingNormalizer` — L2 + опциональный whitening/PCA (артефакт в файле)
-- [ ] `GalleryManager` — галереи по камерам и временным окнам
-- [ ] `ReIdMatcher` — пары «треклет → кандидаты» с `c_app`
-- [ ] `apps/eval` (часть) — CMC/Rank-1/mAP
-- [ ] `scripts/bench_index.cpp` — бенчмарк латентности
+- [x] `IEmbeddingIndex` (`Add`, `Search`, `Remove`, `Rebuild`, фильтр кандидатов)
+- [x] `BruteForceIndex` (Eigen) — эталон и дефолт для малых сессий
+- [x] `FaissIndex` — `FLAT_IP`, `IVF_PQ`, `HNSW32`; `nlist`/`nprobe` из конфига
+      (код написан, локально **не компилировался** — FAISS не установлен)
+- [x] `EmbeddingNormalizer` — L2 + опциональный whitening/PCA (артефакт `TMCMTWN1`)
+- [x] `GalleryManager` — галереи по камерам и временным окнам, retention-eviction
+- [x] `ReIdMatcher` — пары «треклет → кандидаты» с `c_app`
+- [x] `apps/reid_eval` — CMC/Rank-1/5/10/mAP (chunk-split и внешний manifest)
+- [x] `apps/reid_bench` — латентность, QPS, recall@k (свои замеры, без Google Benchmark)
+- [x] `reid.min_similarity` и `reid.exclude_same_camera` в конфиге и валидации
+- [x] Тесты `test_embedding_index.cpp` (16), `test_reid_gallery.cpp` (21),
+      `test_faiss_index.cpp` (guarded `TRAFFICMCMT_WITH_FAISS`)
+- [x] `docs/reid-eval.md` — протокол оценки, схема manifest, формулы, ограничения
 
 ### DoD
 
-- `BruteForceIndex` и `FaissIndex(FLAT)` дают идентичный top-K (recall@10 = 1.0).
-- `IVF_PQ`: recall@10 ≥ 0.97 на 1M векторов.
-- 1000 запросов по 1M × 512-d: p99 < 20 мс (CPU).
-- Rank-1 на тестовом ReID-сплите ≥ 0.85 (фиксируется отчёт с моделью и препроцессингом).
-- `TRAFFICMCMT_WITH_FAISS=OFF` собирается и проходит тесты на `BruteForceIndex`.
+- [x] `BruteForceIndex` и `FaissIndex(FLAT)` дают идентичный top-K (recall@10 = 1.0).
+      Тест `FaissIndex.FlatMatchesBruteForceTopK` написан, но выполняется только при
+      `TRAFFICMCMT_WITH_FAISS=ON`.
+- [ ] `IVF_PQ`: recall@10 ≥ 0.97 на 1M векторов. ⛔ FAISS не установлен; тест
+      `FaissIndex.IvfPqRecallIsHigh` (5k×32-d, порог 0.90) не запускался.
+- [ ] 1000 запросов по 1M × 512-d: p99 < 20 мс (CPU). 🟡 точный скан не достигает
+      (200k×512: p99 16.2 мс); нужен `faiss_ivf_pq`.
+- [ ] Rank-1 на тестовом ReID-сплите ≥ 0.85. 🟡 chunk-split даёт 0.46/0.75; нужен
+      размеченный кросс-камерный сплит.
+- [x] `TRAFFICMCMT_WITH_FAISS=OFF` собирается и проходит тесты на `BruteForceIndex`.
+
+### Прогресс (2026-11-08)
+
+| Проверка | Результат |
+|---|---|
+| Сборка | `local-release`, MSVC 19.51 / VS 2026 — OK |
+| Тесты C++ | `ctest --preset local-release`: **195/195 passed** |
+| CI-сценарий | `EDGE=OFF, MTT=OFF, PROTOBUF=OFF`: сборка OK, **97/97 passed** |
+| `reid_eval` Aire (chunk-split) | gallery 87, queries 78, identities 33; Rank-1 **0.4615**, Rank-5 0.7949, Rank-10 0.8718, mAP 0.3439 |
+| `reid_eval` Auburn (chunk-split) | gallery 117, queries 109, identities 32; Rank-1 **0.7523**, Rank-5 0.9817, Rank-10 1.0000, mAP 0.6078 |
+| `reid_bench` brute 200k×512 | 200 запросов, k=10: p50 12.6 мс, p95 14.9 мс, p99 16.2 мс, QPS 77.8, recall@10 1.0 |
+| Manifest-режим | smoke на 5 записях: Rank-1 1.0, mAP 1.0 |
+
+### Команды
+
+```powershell
+cmake --build --preset local-release
+ctest --preset local-release
+
+# chunk-split оценка на наших треклетах
+.\build\local-release\Release\trafficmcmt_reid_eval.exe `
+  --tracklets build\datasets\aire\cam-01.jsonl
+
+# внешний размеченный сплит
+.\build\local-release\Release\trafficmcmt_reid_eval.exe `
+  --manifest build\reid\manifest.jsonl --json
+
+# бенчмарк индекса
+.\build\local-release\Release\trafficmcmt_reid_bench.exe `
+  --vectors 200000 --dim 512 --queries 200 --k 10 --index brute --json
+```
+
+Обёртки: `scripts/reid_eval_aire.ps1`, `scripts/reid_eval_auburn.ps1`.
+
+### Ограничения
+
+- **FAISS не проверен.** Пакет не установлен на машине разработки, поэтому
+  `src/reid/FaissIndex.cpp` и `test_faiss_index.cpp` никогда не компилировались.
+  Возможны ошибки API (`IndexIDMap2`, `IndexIVFPQ`, `IndexHNSWFlat`); исправлять
+  при появлении `faiss` в vcpkg. Дефолт и эталон — `BruteForceIndex`.
+- **Rank-1 DoD не достигнут на chunk-split.** 0.46 (Aire) / 0.75 (Auburn) — это
+  согласованность дескриптора внутри трека, а не кросс-камерный ReID. Целевые
+  0.85 требуют размеченного кросс-камерного сплита (`--manifest`).
+- **p99 < 20 мс на 1M×512 не достигнут точным сканом.** Brute force memory-bound:
+  один запрос читает `N·dim·4` байт (410 МБ при 200k×512). Цель достижима только
+  `faiss_ivf_pq`; `reid_bench` хранит данные и копию в индексе (~4+ ГБ RAM на
+  1M×512).
+- `EmbeddingNormalizer` не обучает whitening/PCA сам — принимает готовый
+  артефакт; тренер вынесен за пределы этапа.
+- `reid_eval` chunk-split использует `exclude_same_camera = false`, иначе
+  одноимённые чанки одной камеры не смогли бы найти друг друга.
 
 ### Тесты
 
-- Эквивалентность бэкендов, пустой индекс, dim mismatch, `Remove` + `Rebuild`.
-- Детерминизм при одинаковом seed.
-- Бенчмарк (Google Benchmark) в nightly.
+- `BruteForceIndex`: top-K по inner product, пустой индекс, `k > N`, dim mismatch,
+  non-finite, `Remove`/`Add`/`Rebuild`, атомарность `Rebuild`, дубликаты, tie-break
+  по `id`, многопоточный скан == однопоточный, фильтр до top-K.
+- `EmbeddingIndexFactory`: создание brute, отказ при `dim <= 0`, `Unsupported` для
+  `faiss_*` при `TRAFFICMCMT_WITH_FAISS=OFF`.
+- `EmbeddingNormalizer`: L2, whitening, zero-vector, dim mismatch, Save/Load,
+  битый/отсутствующий артефакт, сохранение `model_id`.
+- `GalleryManager`: add/remove, фильтры по камере/модели/типу/времени,
+  `min_similarity`, retention-eviction, re-add, `exclude_id`.
+- `ReIdMatcher`: `c_app`, запрет сравнения разных `model_id`, невалидный запрос.
 
 ---
 
@@ -570,3 +638,4 @@ Viewer: `npm run dev`, кадры `emission_grid` приходят с часто
 | 2026-11-03 | Добавлен общий ENU origin (`--geo-origin`, `origin_lat/origin_lon`); межкамерные world-координаты Auburn в 2-секундном окне: 199 совпавших timestamp, 0.53–2.80 м (медиана 1.62 м), все ≤ 5 м; добавлены `scripts/run_aire.ps1`, `scripts/run_auburn_toomer.ps1`, манифесты датасетов |
 | 2026-11-05 | Этап 2b завершён: origin в протоколе, `core/Geo`, `trafficmcmt_map`, `trafficmcmt_net` (RFC 6455), `map_export`, `map_gateway`, `configs/map_feed*.yaml`; viewer получил `speed_kmh` и `tracks_remove`; `ctest` 117/117, `vitest` 20/20; smoke gateway: 43 кадра/4 с, скорость до 52.55 км/ч |
 | 2026-11-07 | Этап 2c завершён: `trafficmcmt_emissions` (HBEFA, Pasquill-Gifford, Gaussian puff, сетка), `AccelerationEstimator`, кадр `emission_grid` (base64 f32 LE, 5 полей), панель концентраций в viewer; `ctest` 156/156, `vitest` 28/28; `map_export` Aire/Auburn по 120×90×5 полей |
+| 2026-11-08 | Этап 3 (базовый ReID): `trafficmcmt_reid` (`IEmbeddingIndex`, `BruteForceIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher`), `FaissIndex` под флагом, `reid_eval`, `reid_bench`, `docs/reid-eval.md`; `ctest` 195/195, CI-сценарий 97/97; chunk-split Rank-1 Aire 0.4615 / Auburn 0.7523; brute 200k×512 p99 16.2 мс; FAISS не установлен — бэкенд не проверен |

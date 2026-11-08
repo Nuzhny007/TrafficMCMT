@@ -93,6 +93,10 @@ struct ReIdConfig {
     int nlist = 4096;
     int nprobe = 32;
     int top_k = 20;
+    /// Drop appearance candidates below this cosine similarity.
+    double min_similarity = 0.0;
+    /// Do not match a tracklet against tracklets from its own camera.
+    bool exclude_same_camera = true;
     std::string whitening;
     /// Store embeddings as int8 in the binary protocol (lossy, ~4x smaller).
     bool quantize_embeddings = false;

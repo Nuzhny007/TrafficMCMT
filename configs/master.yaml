@@ -34,6 +34,10 @@ reid:
   nlist: 4096
   nprobe: 32
   top_k: 20
+  # Drop appearance candidates below this cosine similarity.
+  min_similarity: 0.0
+  # Do not match a tracklet against tracklets from its own camera.
+  exclude_same_camera: true
   whitening: ""
   # Store embeddings as int8 in the binary protocol (lossy, ~4x smaller).
   quantize_embeddings: false

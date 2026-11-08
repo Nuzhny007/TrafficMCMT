@@ -17,6 +17,15 @@ if(TARGET trafficmcmt_emissions)
         unit/test_emissions.cpp)
 endif()
 
+if(TARGET trafficmcmt_reid)
+    list(APPEND TMCMT_TEST_SOURCES
+        unit/test_embedding_index.cpp
+        unit/test_reid_gallery.cpp)
+    if(TRAFFICMCMT_WITH_FAISS)
+        list(APPEND TMCMT_TEST_SOURCES unit/test_faiss_index.cpp)
+    endif()
+endif()
+
 if(TARGET trafficmcmt_map)
     list(APPEND TMCMT_TEST_SOURCES
         unit/test_map.cpp)
@@ -40,6 +49,10 @@ endif()
 
 if(TARGET trafficmcmt_emissions)
     target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_emissions)
+endif()
+
+if(TARGET trafficmcmt_reid)
+    target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_reid)
 endif()
 
 if(TARGET trafficmcmt_map)
