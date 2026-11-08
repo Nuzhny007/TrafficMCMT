@@ -664,5 +664,5 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 | 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу; §7.7 — `emission_grid` |
 | 8. Алгоритмы | 🟡 `GeoBinding` (метры) готов; st-ReID и MCF — Этапы 3–5 |
 | 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 155 unit-тестов (протокол, geo, type-aware ReID, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 156 unit-тестов (протокол, geo, type-aware ReID, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
 | 11. ADR | ✅ |

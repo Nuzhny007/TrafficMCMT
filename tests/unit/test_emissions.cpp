@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstddef>
@@ -464,6 +465,30 @@ TEST(Simulator, DropsEmittersThatDisappear) {
 
     simulator.Step(Ms(1000), {MakeSource(1, 0.0, 0.0)});
     EXPECT_EQ(simulator.EmitterCount(), 1u);
+}
+
+TEST(Simulator, DropsStaleEmitterWhenTheTrackCountStaysTheSame) {
+    EmissionSimulator simulator(MakeConfig(), GeoPoint{kOriginLat, kOriginLon});
+    simulator.Step(Ms(0), {MakeSource(1, 0.0, 0.0, 10.0)});
+    ASSERT_EQ(simulator.EmitterCount(), 1u);
+
+    // Same number of tracks, different id: the emitter of track 1 must go.
+    simulator.Step(Ms(1000), {MakeSource(2, 0.0, 0.0, 10.0)});
+    EXPECT_EQ(simulator.EmitterCount(), 1u);
+
+    // Track 1 returns after a long gap. A stale `last_spawn` would release the
+    // whole gap as one puff (tens of times the normal mass).
+    simulator.Step(Ms(30000), {MakeSource(1, 0.0, 0.0, 10.0)});
+    ASSERT_EQ(simulator.EmitterCount(), 1u);
+
+    const std::optional<EmissionGridSnapshot> snapshot = simulator.BuildSnapshot(Ms(30000));
+    ASSERT_TRUE(snapshot.has_value());
+    const auto& nox = snapshot->fields[static_cast<std::size_t>(Pollutant::NOx)];
+    const float peak = *std::max_element(nox.begin(), nox.end());
+    // One interval of idle-speed car NOx is ~10^2 ug/m3; a 30 s gap-sized puff
+    // would be an order of magnitude above the 500 threshold.
+    EXPECT_GT(peak, 0.f);
+    EXPECT_LT(peak, 500.f);
 }
 
 TEST(Simulator, GridFrameRate) {

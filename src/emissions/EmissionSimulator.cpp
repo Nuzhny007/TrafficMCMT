@@ -5,7 +5,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <numbers>
-#include <unordered_set>
 #include <utility>
 
 #include "trafficmcmt/emissions/GaussianPuffModel.h"
@@ -84,8 +83,10 @@ void EmissionSimulator::Step(Timestamp now, const std::vector<EmissionSource>& s
     const Timestamp interval(
         static_cast<std::int64_t>(std::max(m_config.puff_interval_s, 0.1) * kMillisecondsPerSecond));
 
+    ++m_generation;
     for (const EmissionSource& source : sources) {
         EmitterState& emitter = m_emitters[source.track_id];
+        emitter.last_seen_generation = m_generation;
         if (!emitter.started) {
             emitter.started = true;
             // Release the first puff immediately with one interval worth of mass.
@@ -99,18 +100,15 @@ void EmissionSimulator::Step(Timestamp now, const std::vector<EmissionSource>& s
         emitter.last_spawn = now;
     }
 
-    if (m_emitters.size() > sources.size()) {
-        std::unordered_set<std::uint64_t> active;
-        active.reserve(sources.size());
-        for (const EmissionSource& source : sources) {
-            active.insert(source.track_id);
-        }
-        for (auto it = m_emitters.begin(); it != m_emitters.end();) {
-            if (active.find(it->first) == active.end()) {
-                it = m_emitters.erase(it);
-            } else {
-                ++it;
-            }
+    // Drop emitters that were not seen this tick. Comparing the generation
+    // rather than the container size also covers a track disappearing while
+    // another appears, which would otherwise keep a stale `last_spawn` and
+    // release a gap-sized puff when the original id returns.
+    for (auto it = m_emitters.begin(); it != m_emitters.end();) {
+        if (it->second.last_seen_generation != m_generation) {
+            it = m_emitters.erase(it);
+        } else {
+            ++it;
         }
     }
 }

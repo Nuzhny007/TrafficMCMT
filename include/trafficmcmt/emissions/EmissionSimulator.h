@@ -82,6 +82,9 @@ private:
     struct EmitterState {
         Timestamp last_spawn{};
         bool started = false;
+        /// Tick generation that last saw this track. Stale entries are dropped
+        /// even when the number of tracks stays the same.
+        std::uint64_t last_seen_generation = 0;
     };
 
     [[nodiscard]] GridSpec MakeSpec() const;
@@ -96,6 +99,7 @@ private:
     Timestamp m_last_grid{};
     bool m_has_grid = false;
     std::uint64_t m_next_puff_id = 1;
+    std::uint64_t m_generation = 0;
 };
 
 } // namespace tmcmt::emissions

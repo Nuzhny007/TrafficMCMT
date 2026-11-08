@@ -298,7 +298,7 @@ MTT/OpenCV/CUDA в Master.
 | Проверка | Результат |
 |---|---|
 | Сборка | `local-release`, MSVC 19.51 / VS 2026 — OK |
-| Тесты C++ | `ctest --preset local-release`: **155/155 passed** |
+| Тесты C++ | `ctest --preset local-release`: **156/156 passed** |
 | Тесты viewer | `vitest run`: **28/28**, `tsc --noEmit` — без ошибок |
 | `map_export` Aire | `cols=120`, `rows=90`, 5 полей; NOx `max=15561`, `p95=465` мкг/м³ |
 | `map_export` Auburn | `cols=120`, `rows=90`, 5 полей; NOx `max=848`, `p95=169` мкг/м³ |
@@ -569,4 +569,4 @@ Viewer: `npm run dev`, кадры `emission_grid` приходят с часто
 | 2026-11-03 | `ctest` 84/84; `aire` 300 кадров: 165 чанков / 4562 наблюдения, `world_valid=100%`; Auburn 300 кадров с кадра 1800: cam-01 66 чанков / 1856 наблюдений, cam-02 160 чанков / 4518 наблюдений, временные диапазоны совпадают |
 | 2026-11-03 | Добавлен общий ENU origin (`--geo-origin`, `origin_lat/origin_lon`); межкамерные world-координаты Auburn в 2-секундном окне: 199 совпавших timestamp, 0.53–2.80 м (медиана 1.62 м), все ≤ 5 м; добавлены `scripts/run_aire.ps1`, `scripts/run_auburn_toomer.ps1`, манифесты датасетов |
 | 2026-11-05 | Этап 2b завершён: origin в протоколе, `core/Geo`, `trafficmcmt_map`, `trafficmcmt_net` (RFC 6455), `map_export`, `map_gateway`, `configs/map_feed*.yaml`; viewer получил `speed_kmh` и `tracks_remove`; `ctest` 117/117, `vitest` 20/20; smoke gateway: 43 кадра/4 с, скорость до 52.55 км/ч |
-| 2026-11-07 | Этап 2c завершён: `trafficmcmt_emissions` (HBEFA, Pasquill-Gifford, Gaussian puff, сетка), `AccelerationEstimator`, кадр `emission_grid` (base64 f32 LE, 5 полей), панель концентраций в viewer; `ctest` 155/155, `vitest` 28/28; `map_export` Aire/Auburn по 120×90×5 полей |
+| 2026-11-07 | Этап 2c завершён: `trafficmcmt_emissions` (HBEFA, Pasquill-Gifford, Gaussian puff, сетка), `AccelerationEstimator`, кадр `emission_grid` (base64 f32 LE, 5 полей), панель концентраций в viewer; `ctest` 156/156, `vitest` 28/28; `map_export` Aire/Auburn по 120×90×5 полей |
