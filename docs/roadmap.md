@@ -1,7 +1,7 @@
 # TrafficMCMT — roadmap
 
 > **Статус документа:** живая спецификация. Чекбоксы обновляются по мере выполнения.
-> **Версия:** 0.3 · **Дата:** 2026-11-05
+> **Версия:** 0.4 · **Дата:** 2026-11-09
 > **Оценки:** человеко-дни для одного senior C++ разработчика.
 
 ## Сводка
@@ -14,7 +14,7 @@
 | 2b | Карта и viewer-фид (WebSocket v1) | 3–5 | ✅ | 2, 2a |
 | 2c | Gaussian puff: выбросы и концентрации | 4–6 | ✅ | 2b |
 | 3 | FAISS и базовый ReID | 7–10 | 🟡 | 2 |
-| 4 | st-ReID (Camera Link Model) | 8–12 | ⬜ | 2, 3 |
+| 4 | st-ReID (Camera Link Model) | 8–12 | ✅ | 2, 3 |
 | 5 | muSSP и глобальная ассоциация | 10–14 | ⬜ | 3, 4 |
 | 6 | ZeroMQ транспорт | 6–8 | ⬜ | 2 |
 | 7 | Синхронизация времени | 7–10 | ⬜ | 5, 6 |
@@ -437,31 +437,87 @@ ctest --preset local-release
 
 ---
 
-## Этап 4. st-ReID и Camera Link Model (8–12 дней) ⬜
+## Этап 4. st-ReID и Camera Link Model (8–12 дней) ✅
 
 **Цель:** отсечь физически невозможные связи, снизить FP на порядок.
 
 ### Задачи
 
-- [ ] `CameraLinkModel` — топология + `(μ, σ)` переходов, YAML I/O
-- [ ] `TransitionEstimator` — робастная оценка `μ, σ` по данным (median/MAD)
-- [ ] `SpatialGate` — zone-based (полигоны) и BEV-based (если есть H)
-- [ ] `StReIdScorer` — fused cost + гейты
-- [ ] `PairCandidateGenerator` — ANN + временные/пространственные гейты
-- [ ] `configs/camera_links.yaml`
+- [x] `CameraLinkModel` — топология + `(μ, σ)` переходов, YAML I/O
+- [x] `TransitionEstimator` — робастная оценка `μ, σ` по данным (median/MAD)
+- [x] `SpatialGate` — zone-based (полигоны) и BEV-based
+- [x] `StReIdScorer` — fused cost + гейты
+- [x] `PairCandidateGenerator` — ANN + временные/пространственные гейты
+- [x] `TrackletEndpoint` и `Polygon` — общие типы и point-in-polygon
+- [x] `configs/camera_links.yaml` — Auburn (`cam-01`/`cam-02`, обе стороны)
+- [x] `st.camera_links` в `MasterConfig` (`ParseSt`/`Dump`), `configs/master.yaml`
+- [x] `apps/st_estimate` — размеченные пары → статистика → YAML
+- [x] `GalleryEntry::entry_world`/`exit_world` — world-координаты из `Tracklet`
+- [x] Тесты `tests/unit/test_st_reid.cpp` (38)
 
 ### DoD
 
-- Синтетика (5 камер, 50 объектов, GT): precision связей ≥ 0.95, recall ≥ 0.80.
-- FP относительно appearance-only снижается ≥ 3×.
-- `TransitionEstimator` воспроизводит `μ, σ` с точностью ±15%.
+- [x] Синтетика (5 камер, 50 объектов, GT): precision связей ≥ 0.95, recall ≥ 0.80.
+- [x] FP относительно appearance-only снижается ≥ 3×.
+- [x] `TransitionEstimator` воспроизводит `μ, σ` с точностью ±15%.
+- [ ] Реальные precision/recall на Auburn/Aire. ⛔ нет кросс-камерного GT.
+
+### Прогресс (2026-11-09)
+
+| Проверка | Результат |
+|---|---|
+| Сборка | `local-release`, MSVC 19.51 / VS 2026 — OK |
+| Тесты C++ | `ctest --preset local-release`: **233/233 passed** |
+| CI-сценарий | `EDGE=OFF, MTT=OFF, PROTOBUF=OFF`: сборка OK, **135/135 passed** |
+| Синтетика DoD | пороговые проверки пройдены: precision ≥ 0.95, recall ≥ 0.80, FP снижены ≥ 3× |
+| `st_estimate` smoke | 6 треклетов, 3 пары → `cam-a → cam-b`: μ 4000 мс, σ 296.52 мс, samples 3 |
+
+### Команды
+
+```powershell
+cmake --build --preset local-release
+ctest --preset local-release
+
+# оценка переходов по размеченным парам
+.\build\local-release\Release\trafficmcmt_st_estimate.exe `
+  --tracklets build\tmp_st\tracklets.jsonl `
+  --pairs build\tmp_st\pairs.jsonl `
+  --out build\tmp_st\camera_links.yaml `
+  --min-samples 3
+```
+
+Формат пар — JSONL: `{"from": 123456789, "to": 987654321}`. `camera`, `begin` и
+`end` берутся из самих треклетов.
+
+### Ограничения
+
+- **Нет кросс-камерного GT для Auburn/Aire.** DoD precision/recall проверяется
+  только синтетикой; реальные цифры появятся с размеченным MTMC-сплитом.
+- **Зоны Auburn пустые.** Общий ENU origin есть, но exit/entry-полигоны не
+  калиброваны; zone-режим для Auburn отключён, BEV использует world-координаты.
+- **Пиксельные зоны невозможны** без изменения протокола: `TrackletChunk` не
+  несёт размер кадра.
+- **Master пока не использует модель.** Загрузка `st.camera_links` и
+  `PairCandidateGenerator` подключаются в Этапе 5 вместе с графом.
+- `c_time` — нормированный `−ln pdf` (0 в среднем, 1 на 3σ); исходная запись в
+  спецификации не обнулялась в среднем (см. §8.1 `architecture.md`).
+- `TransitionEstimator` требует ≥ `min_samples` (по умолчанию 3) на направленное
+  ребро; редкие переходы остаются без статистики и используют fallback-окно.
+- `default_linked: false`: без явного `links` ни одна пара не разрешена.
 
 ### Тесты
 
-- Формулы: монотонность, симметрия `c_app`, границы гейтов.
-- Полигоны: внутри/снаружи/на границе.
-- `TransitionEstimator` на синтетике с известными параметрами.
-- Кейсы: камеры не связаны, `Δt` вне окна, объект стоял на месте.
+- Формулы: монотонность `c_time`, симметрия/границы `c_app`, `c_space`, веса.
+- Полигоны: внутри/снаружи/на границе, вогнутый, невалидный.
+- `TransitionEstimator`: известные μ/σ (±15%), trim выбросов, чётная медиана,
+  отрицательные Δt, группировка по направлению, валидация опций.
+- Гейты: same-camera, unlinked, окно, 3σ, zone, BEV (speed/distance),
+  `MissingWorld` и `allow_missing_world`.
+- `PairCandidateGenerator`: сортировка по `c_total`, обрезка, `min_similarity`,
+  `max_total_cost`, исключение своей камеры, мульти-запросы.
+- `CameraLinkModel`: YAML round-trip, `default_linked`, дубликаты, self-link,
+  неполная статистика, плоские списки координат.
+- DoD-синтетика: 5 камер × 50 объектов, appearance-only baseline.
 
 ---
 
@@ -639,3 +695,4 @@ ctest --preset local-release
 | 2026-11-05 | Этап 2b завершён: origin в протоколе, `core/Geo`, `trafficmcmt_map`, `trafficmcmt_net` (RFC 6455), `map_export`, `map_gateway`, `configs/map_feed*.yaml`; viewer получил `speed_kmh` и `tracks_remove`; `ctest` 117/117, `vitest` 20/20; smoke gateway: 43 кадра/4 с, скорость до 52.55 км/ч |
 | 2026-11-07 | Этап 2c завершён: `trafficmcmt_emissions` (HBEFA, Pasquill-Gifford, Gaussian puff, сетка), `AccelerationEstimator`, кадр `emission_grid` (base64 f32 LE, 5 полей), панель концентраций в viewer; `ctest` 156/156, `vitest` 28/28; `map_export` Aire/Auburn по 120×90×5 полей |
 | 2026-11-08 | Этап 3 (базовый ReID): `trafficmcmt_reid` (`IEmbeddingIndex`, `BruteForceIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher`), `FaissIndex` под флагом, `reid_eval`, `reid_bench`, `docs/reid-eval.md`; `ctest` 195/195, CI-сценарий 97/97; chunk-split Rank-1 Aire 0.4615 / Auburn 0.7523; brute 200k×512 p99 16.2 мс; FAISS не установлен — бэкенд не проверен |
+| 2026-11-09 | Этап 4 (st-ReID): `trafficmcmt_st` (`CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon`), `st.camera_links`, `configs/camera_links.yaml`, `st_estimate`; `GalleryEntry` получил world-endpoints; `ctest` 233/233, CI-сценарий 135/135; синтетика DoD 5×50 пройдена; smoke `st_estimate` μ=4000 мс, σ=296.52 мс; реальный кросс-камерный GT отсутствует |

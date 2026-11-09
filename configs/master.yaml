@@ -45,6 +45,10 @@ reid:
 st:
   min_transition_ms: 0
   max_transition_ms: 120000
+  # Camera topology and transition statistics (ENU zones, directed links).
+  # Empty disables the link/transition gate. The Master starts using the model
+  # in stage 5; the st_estimate tool writes this file.
+  camera_links: "configs/camera_links.yaml"
   weights:
     appearance: 1.0
     temporal: 0.5

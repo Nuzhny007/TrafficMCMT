@@ -188,7 +188,7 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `TrackletNormalizer`, `InMemoryTrackletStore`, `JsonlTrackletSink`, `BinaryTrackletSink` | protobuf |
 | `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `TypeAwareReIdExtractor`, `GeoBinding`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn, calib3d) |
 | `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
-| `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer` | core, Eigen |
+| `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon` | core, reid (Eigen) |
 | `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `FlowAssociator`, `GlobalIdManager` | muSSP (opt.), Eigen |
 | `trafficmcmt_bev` | `HomographyProjector`, `WorldTrajectoryFusion` | OpenCV core, Eigen |
 | `trafficmcmt_net` | `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink` | libzmq/cppzmq, protobuf |
@@ -203,7 +203,8 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 JSON-дамп треклетов). Этап 2b/2c добавляет `trafficmcmt_map_export` (треклеты →
 JSONL-кадры v1) и `trafficmcmt_map_gateway` (WebSocket-реплей кадров и выбросов).
 Этап 3 добавляет `trafficmcmt_reid_eval` (CMC/Rank-1/mAP) и `trafficmcmt_reid_bench`
-(латентность и recall индекса).
+(латентность и recall индекса). Этап 4 добавляет `trafficmcmt_st_estimate`
+(размеченные пары → статистика переходов → `camera_links.yaml`).
 
 ### 6.1. Публичный контракт
 
@@ -577,14 +578,20 @@ emissions:
 ### 8.1. Стоимость связи треклетов
 
 ```
-c_app   = 1 - cos(e_a, e_b)                              ∈ [0, 2]
-c_time  = clamp(-log N(Δt; μ_ab, σ_ab), 0, τ_t) / τ_t     ∈ [0, 1]
-c_space = min(1, d_bev / (v_max · Δt))                   ∈ [0, 1]
+c_app   = clamp(1 - cos(e_a, e_b), 0, 2)                       ∈ [0, 2]
+c_time  = clamp(z²/2, 0, 4.5) / 4.5,  z = (Δt − μ_ab)/σ_ab     ∈ [0, 1]
+c_space = min(1, d_bev / (v_max · max(Δt, ε)))                 ∈ [0, 1]
 c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 ```
 
-Гейты (ребро не строится): `Δt ∉ [μ-3σ, μ+3σ]`, камеры не связаны в `CameraLinkModel`,
-зоны выхода/входа не согласованы (zone-режим), `d_bev > v_max·Δt + ε` (BEV-режим).
+`c_time` — это `−ln N(Δt; μ, σ²)` с вычтенной константой `ln(σ√2π)` и нормировкой
+на значение в точке `z = 3`: стоимость равна 0 в среднем и 1 на границе 3σ.
+Исходная запись `clamp(−ln pdf, 0, τ_t)/τ_t` в среднем не обнулялась.
+
+Гейты (ребро не строится): `Δt ∉ [μ−3σ, μ+3σ]`, `Δt` вне fallback-окна, камеры
+не связаны в `CameraLinkModel`, зоны выхода/входа не согласованы (zone-режим),
+`d_bev > v_max·Δt + ε` (BEV-режим), нет валидных world-координат (zone/BEV).
+Подробности — §8.5.
 
 ### 8.2. Глобальная ассоциация
 
@@ -705,6 +712,79 @@ Brute force упирается в память: один запрос читае
 200k×512). Цель p99 < 20 мс на 1M×512 достигается только приближённым индексом
 (`faiss_ivf_pq`), а не точным сканом.
 
+### 8.5. st-ReID: топология камер, переходы и пространственные гейты
+
+Модуль `trafficmcmt_st` — CPU-only: `trafficmcmt_core` + `trafficmcmt_reid`
+(Eigen транзитивно). Он не линкует OpenCV, protobuf или Multitarget-tracker и
+собирается в CI-конфигурации `EDGE=OFF, MTT=OFF, PROTOBUF=OFF`.
+
+**CameraLinkModel.** Топология и статистика переходов читаются из YAML
+(`configs/camera_links.yaml`, путь — `st.camera_links`):
+
+```yaml
+default_linked: false
+fallback:
+  min_transition_ms: 0
+  max_transition_ms: 120000
+cameras:
+  cam-01:
+    exit_zone:  [[east, north], ...]   # ENU-метры
+  cam-02:
+    entry_zone: [[east, north], ...]
+links:
+  - from: cam-01
+    to: cam-02
+    enabled: true
+    mean_ms: 4000
+    stddev_ms: 300
+    samples: 42
+```
+
+- Зоны — полигоны в ENU-метрах в общем origin потока. Протокол не несёт размер
+  кадра, поэтому пиксельные зоны невозможны без изменения протокола.
+- `default_linked: false` — безопасный дефолт: без явного `links` никто не
+  связан. `enabled: false` запрещает ребро даже при `default_linked: true`.
+- Пустой `st.camera_links` = модель не загружена: link- и measured-transition
+  проверки пропускаются, окно/зоны/BEV продолжают работать.
+- Валидация: self-link, пустые id, дубликаты `(from, to)`, неполный набор
+  `mean_ms/stddev_ms/samples`, `stddev_ms <= 0`, полигон < 3 точек, не-конечные
+  координаты, `min_transition_ms >= max_transition_ms`.
+
+**TransitionEstimator.** Робастная оценка по размеченным парам:
+
+- группировка по направленному ребру `(from, to)`; отрицательные `Δt` и (по
+  умолчанию) same-camera отбрасываются;
+- `μ = median(Δt)`, `σ = 1.4826 · MAD`, нижний clamp `min_stddev_ms`;
+- one-pass trim: точки дальше `outlier_sigma·σ` от медианы выбрасываются, если
+  после trim остаётся ≥ `min_samples`;
+- пары с числом валидных samples < `min_samples` в модель не попадают.
+
+`apps/st_estimate` читает треклеты и JSONL `{"from": id, "to": id}`, берёт
+`camera`/`begin`/`end` из самих треклетов и пишет YAML. `samples` — число
+сэмплов после trim.
+
+**SpatialGate.** Всегда проверяет same-camera (по умолчанию reject), link в
+модели, `Δt ∈ [min_transition_ms, max_transition_ms]` и `Δt ∈ [μ−3σ, μ+3σ]` при
+наличии статистики. В режиме `zone`: exit-точка источника в `exit_zone`,
+entry-точка приёмника в `entry_zone`. В режиме `bev`: `d ≤ max_distance_m` и
+`d ≤ v_max·Δt`. Отсутствие валидных world-координат → `MissingWorld`;
+debug-флаг `allow_missing_world` пропускает zone/BEV-проверки.
+
+**StReIdScorer.** Формулы — в §8.1. Без измеренной статистики `μ` и `σ` берутся
+из fallback-окна: `μ = (min + max)/2`, `σ = (max − min)/6`.
+
+**PairCandidateGenerator.** Берёт ANN-кандидатов через `ReIdMatcher`
+(эффективный `top_k = top_k · oversample`), применяет гейты и `c_total`,
+сортирует по возрастанию `c_total` (при равенстве — similarity desc, затем id)
+и обрезает до `top_k`. `PairGenerationStats` считает причины отказов
+(`unlinked`, `outside_window`, `outside_sigma`, `missing_world`, `exit_zone`,
+`entry_zone`, `speed`, `distance`, `rejected_cost`, `truncated`).
+
+**DoD Этапа 4.** Синтетика 5 камер × 50 объектов: precision ≥ 0.95,
+recall ≥ 0.80, FP снижены ≥ 3× относительно appearance-only top-1. Реального
+кросс-камерного GT для Auburn/Aire нет, поэтому precision/recall на этих
+наборах не измеряются — проверка синтетическая.
+
 ## 9. Нефункциональные требования
 
 | Требование | Цель |
@@ -742,6 +822,7 @@ Brute force упирается в память: один запрос читае
 | ADR-008 | ReID по типу объекта с отдельными `model_id` | пешеходы и транспорт требуют разных моделей; `model_id` защищает от смешивания | единая модель для всех типов |
 | ADR-009 | HBEFA-таблица портирована в `trafficmcmt_emissions` с атрибуцией | расчёт сверяем с эталоном SUMO построчно, модуль не тянет GPL-код сборки | своя калибровка; отдельный GPL-модуль (см. `docs/emissions-attribution.md`) |
 | ADR-010 | Галерея хранит авторитетные векторы, индекс — производная структура | точные `Remove`/`Evict`/`Rebuild` на любом бэкенде, включая приближённый FAISS | удалять только из индекса и доверять его `remove_ids` |
+| ADR-011 | Зоны входа/выхода — ENU-метры, не пиксели; `default_linked: false` | общий origin уже есть у геопривязки, протокол не несёт размер кадра; явная топология аудируема и не пропускает случайные пары | пиксельные зоны (нужно менять протокол); `default_linked: true` |
 
 ## 12. Глоссарий
 
@@ -765,9 +846,9 @@ Brute force упирается в память: один запрос читае
 | 3. Топология | ✅ зафиксировано |
 | 4. Потоки данных | ✅ зафиксировано |
 | 5. Режимы | ✅ зафиксировано |
-| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `map`, `net`, `emissions` реализованы; остальные — план |
+| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `st`, `map`, `net`, `emissions` реализованы; остальные — план |
 | 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу; §7.7 — `emission_grid` |
-| 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер готовы; st-ReID и MCF — Этапы 4–5 |
+| 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер и st-ReID готовы; MCF — Этап 5 |
 | 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 195 unit-тестов (протокол, geo, type-aware ReID, reid, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 233 unit-теста (протокол, geo, type-aware ReID, reid, st, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
 | 11. ADR | ✅ |

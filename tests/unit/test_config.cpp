@@ -77,6 +77,7 @@ reid:
 st:
   min_transition_ms: 100
   max_transition_ms: 60000
+  camera_links: configs/test_links.yaml
   weights:
     appearance: 2.0
     temporal: 0.25
@@ -145,6 +146,7 @@ TEST(Config, LoadsFullConfiguration) {
 
     EXPECT_EQ(config.st.min_transition_ms, 100);
     EXPECT_EQ(config.st.max_transition_ms, 60000);
+    EXPECT_EQ(config.st.camera_links, "configs/test_links.yaml");
     EXPECT_DOUBLE_EQ(config.st.weights.appearance, 2.0);
     EXPECT_DOUBLE_EQ(config.st.weights.temporal, 0.25);
     EXPECT_DOUBLE_EQ(config.st.weights.spatial, 0.75);

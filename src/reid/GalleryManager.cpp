@@ -31,6 +31,15 @@ Status GalleryManager::Add(const Tracklet& tracklet) {
     entry.end = tracklet.end;
     entry.quality = tracklet.quality;
     entry.values = tracklet.embedding.values;
+    for (const Observation& observation : tracklet.observations) {
+        if (!observation.world.IsFinite()) {
+            continue;
+        }
+        if (!entry.entry_world.IsFinite()) {
+            entry.entry_world = observation.world;
+        }
+        entry.exit_world = observation.world;
+    }
     return Add(entry);
 }
 

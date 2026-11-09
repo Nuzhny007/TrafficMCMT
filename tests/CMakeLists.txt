@@ -31,6 +31,11 @@ if(TARGET trafficmcmt_map)
         unit/test_map.cpp)
 endif()
 
+if(TARGET trafficmcmt_st)
+    list(APPEND TMCMT_TEST_SOURCES
+        unit/test_st_reid.cpp)
+endif()
+
 add_executable(trafficmcmt_unit_tests ${TMCMT_TEST_SOURCES})
 
 target_link_libraries(trafficmcmt_unit_tests
@@ -57,6 +62,10 @@ endif()
 
 if(TARGET trafficmcmt_map)
     target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_map)
+endif()
+
+if(TARGET trafficmcmt_st)
+    target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_st)
 endif()
 
 tmcmt_set_warnings(trafficmcmt_unit_tests)

@@ -317,6 +317,9 @@ Status ParseSt(const YAML::Node& root, StConfig& out) {
     if (!(status = ReadScalar(node, "max_transition_ms", out.max_transition_ms, "st")).ok()) {
         return status;
     }
+    if (!(status = ReadScalar(node, "camera_links", out.camera_links, "st")).ok()) {
+        return status;
+    }
 
     YAML::Node weights;
     if (!(status = ReadSection(node, "weights", weights, "st")).ok()) {
@@ -799,6 +802,7 @@ std::string Dump(const MasterConfig& config) {
 
     root["st"]["min_transition_ms"] = config.st.min_transition_ms;
     root["st"]["max_transition_ms"] = config.st.max_transition_ms;
+    root["st"]["camera_links"] = config.st.camera_links;
     root["st"]["weights"]["appearance"] = config.st.weights.appearance;
     root["st"]["weights"]["temporal"] = config.st.weights.temporal;
     root["st"]["weights"]["spatial"] = config.st.weights.spatial;

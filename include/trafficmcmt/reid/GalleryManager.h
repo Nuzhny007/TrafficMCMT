@@ -27,6 +27,11 @@ struct GalleryEntry {
     Timestamp end{};
     float quality = 1.f;
     std::vector<float> values;
+    /// World coordinates of the first/last observation with valid geo data.
+    /// Filled by `Add(const Tracklet&)`; callers of `Add(const GalleryEntry&)`
+    /// may leave them invalid.
+    WorldPoint entry_world{};
+    WorldPoint exit_world{};
 };
 
 struct GalleryOptions {

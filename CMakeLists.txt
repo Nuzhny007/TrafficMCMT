@@ -108,9 +108,33 @@ if(TRAFFICMCMT_WITH_FAISS)
 endif()
 
 # ---------------------------------------------------------------------------
+# st-ReID: camera topology, transition estimation, spatial gates and the
+# fused scorer (stage 4). CPU-only; no OpenCV, protobuf or Multitarget-tracker.
+# ---------------------------------------------------------------------------
+add_library(trafficmcmt_st STATIC
+    src/st/CameraLinkModel.cpp
+    src/st/PairCandidateGenerator.cpp
+    src/st/Polygon.cpp
+    src/st/SpatialGate.cpp
+    src/st/StReIdScorer.cpp
+    src/st/TrackletEndpoint.cpp
+    src/st/TransitionEstimator.cpp)
+add_library(TrafficMCMT::st ALIAS trafficmcmt_st)
+
+target_link_libraries(trafficmcmt_st
+    PUBLIC
+        trafficmcmt_core
+        trafficmcmt_reid)
+tmcmt_set_warnings(trafficmcmt_st)
+
+# ---------------------------------------------------------------------------
 # Protocol: generated protobuf messages (stage 2).
 # ---------------------------------------------------------------------------
-set(TMCMT_INSTALL_TARGETS trafficmcmt_core trafficmcmt_emissions trafficmcmt_reid)
+set(TMCMT_INSTALL_TARGETS
+    trafficmcmt_core
+    trafficmcmt_emissions
+    trafficmcmt_reid
+    trafficmcmt_st)
 
 if(TRAFFICMCMT_WITH_PROTOBUF)
     set(TMCMT_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
@@ -295,6 +319,14 @@ if(TARGET trafficmcmt_io)
             trafficmcmt_reid)
     tmcmt_set_warnings(trafficmcmt_reid_eval)
     tmcmt_copy_runtime_dependencies(trafficmcmt_reid_eval)
+
+    add_executable(trafficmcmt_st_estimate apps/st_estimate/main.cpp)
+    target_link_libraries(trafficmcmt_st_estimate
+        PRIVATE
+            trafficmcmt_io
+            trafficmcmt_st)
+    tmcmt_set_warnings(trafficmcmt_st_estimate)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_st_estimate)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -344,4 +376,5 @@ install(FILES
     configs/logging.yaml
     configs/map_feed.yaml
     configs/map_feed_aire.yaml
+    configs/camera_links.yaml
     DESTINATION ${CMAKE_INSTALL_DATADIR}/trafficmcmt)

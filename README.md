@@ -27,7 +27,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 | 2b. Карта и viewer-фид (WebSocket v1) | ✅ готов |
 | 2c. Gaussian puff: выбросы и концентрации | ✅ готов |
 | 3. FAISS и ReID | 🟡 индекс/галереи/матчер и оценка готовы; FAISS не проверен |
-| 4. st-ReID | ⬜ |
+| 4. st-ReID | ✅ Camera Link Model, переходы, гейты, scorer; реальный GT отсутствует |
 | 5. muSSP и глобальная ассоциация | ⬜ |
 | 6. ZeroMQ транспорт | ⬜ |
 | 7. Синхронизация времени | ⬜ |
@@ -153,6 +153,27 @@ protobuf или MTT. `TRAFFICMCMT_WITH_FAISS=OFF` — рабочая конфи�
 `BruteForceIndex`; запрос `faiss_*` в такой сборке возвращает `Unsupported`.
 Протокол оценки, формулы и ограничения — в [`docs/reid-eval.md`](docs/reid-eval.md).
 
+st-ReID: топология камер и оценка переходов (Этап 4):
+
+```powershell
+# размеченные пары: JSONL {"from": <tracklet_id>, "to": <tracklet_id>}
+.\build\local-release\Release\trafficmcmt_st_estimate.exe `
+  --tracklets build\datasets\auburn_toomer\combined.jsonl `
+  --pairs build\st\pairs.jsonl `
+  --out configs\camera_links.yaml `
+  --min-samples 3
+```
+
+`trafficmcmt_st_estimate` группирует пары по направленному ребру `(from, to)`,
+считает робастные `μ`/`σ` (median/MAD + trim) и пишет YAML-модель. Модель
+подключается через `st.camera_links` в `configs/master.yaml`; шаблон Auburn —
+`configs/camera_links.yaml`. Зоны входа/выхода задаются в ENU-метрах общего
+origin. `default_linked: false` — без явных `links` пары не разрешены.
+
+Модуль `trafficmcmt_st` — CPU-only (`core` + `reid`), собирается при
+`EDGE=OFF, MTT=OFF, PROTOBUF=OFF`. Формулы `c_time`/`c_space`/`c_total` и
+описание гейтов — в `docs/architecture.md` §8.1 и §8.5.
+
 ## Структура
 
 ```
@@ -164,8 +185,9 @@ include/trafficmcmt/map/    MapFeed, MapProtocol, MapConfig, timeline, velocity,
 include/trafficmcmt/net/    WebSocket-сервер/клиент (RFC 6455, без зависимостей)
 include/trafficmcmt/emissions/  HBEFA, Pasquill-Gifford, Gaussian puff, сетка концентраций
 include/trafficmcmt/reid/   IEmbeddingIndex, BruteForceIndex, FaissIndex, GalleryManager, ReIdMatcher
+include/trafficmcmt/st/     CameraLinkModel, TransitionEstimator, SpatialGate, StReIdScorer, PairCandidateGenerator
 proto/                      protobuf-схемы v1 (tracklet, calibration)
-src/                        реализации core/io/edge/mtt/map/net/emissions/reid
+src/                        реализации core/io/edge/mtt/map/net/emissions/reid/st
 apps/master_node/           точка входа Master
 apps/mtt_export/            видео → треклеты (Edge, OpenCV + MTT)
 apps/map_export/            треклеты → JSONL-кадры протокола v1
@@ -173,8 +195,9 @@ apps/map_gateway/           WebSocket-реплей кадров для viewer
 apps/tracklet_inspect/      инспектор треклетов
 apps/reid_eval/             CMC/Rank-1/mAP (chunk-split и manifest)
 apps/reid_bench/            латентность, QPS, recall@k индекса
+apps/st_estimate/           размеченные пары → статистика переходов → camera_links.yaml
 tests/unit/                 unit-тесты (GTest)
-configs/                    примеры конфигурации (включая map_feed*.yaml)
+configs/                    примеры конфигурации (включая map_feed*.yaml, camera_links.yaml)
 cmake/                      зависимости, warnings, runtime-DLL, package config
 docs/                       архитектура, roadmap, оценка ReID
 scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway, reid_eval_*

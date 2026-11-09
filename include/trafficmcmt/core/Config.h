@@ -119,6 +119,9 @@ struct StConfig {
     int max_transition_ms = 120000;
     StWeights weights;
     GateConfig gate;
+    /// Camera topology and transition statistics (YAML). Empty disables the
+    /// link and measured-transition checks.
+    std::string camera_links;
 };
 
 struct FlowConfig {
