@@ -26,6 +26,8 @@ option(TRAFFICMCMT_WITH_MAP       "Map feed: tracklets -> viewer protocol" ON)
 option(TRAFFICMCMT_WITH_WS        "WebSocket server for the map feed" ON)
 option(TRAFFICMCMT_WITH_FAISS     "FAISS vector index (stage 3)" OFF)
 option(TRAFFICMCMT_WITH_MUSSP     "muSSP min-cost flow solver (stage 5)" OFF)
+set(TRAFFICMCMT_MUSSP_SOURCE_DIR "" CACHE PATH
+    "Path to a muSSP checkout (must contain muSSP/Graph.cpp)")
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(GNUInstallDirs)
@@ -128,13 +130,85 @@ target_link_libraries(trafficmcmt_st
 tmcmt_set_warnings(trafficmcmt_st)
 
 # ---------------------------------------------------------------------------
+# Flow: tracklet graph, pruning and global association (stage 5).
+# CPU-only; muSSP is an optional private dependency.
+# ---------------------------------------------------------------------------
+if(TRAFFICMCMT_WITH_MUSSP)
+    if(TMCMT_MUSSP_LOCAL)
+        # Compile the third-party sources into an object library and embed the
+        # objects into trafficmcmt_flow. A separate non-imported library would
+        # leak an absolute source path into TrafficMCMTTargets.cmake, and an
+        # object library keeps the project warning policy off the vendored code.
+        add_library(trafficmcmt_mussp_objects OBJECT
+            ${TRAFFICMCMT_MUSSP_SOURCE_DIR}/muSSP/Graph.cpp
+            ${TRAFFICMCMT_MUSSP_SOURCE_DIR}/muSSP/Node.cpp
+            ${TRAFFICMCMT_MUSSP_SOURCE_DIR}/muSSP/Sink.cpp)
+        target_include_directories(trafficmcmt_mussp_objects PRIVATE
+            ${TRAFFICMCMT_MUSSP_SOURCE_DIR}/muSSP)
+        if(MSVC)
+            target_compile_options(trafficmcmt_mussp_objects PRIVATE /w)
+        else()
+            target_compile_options(trafficmcmt_mussp_objects PRIVATE -w)
+        endif()
+        set(TMCMT_MUSSP_OBJECTS $<TARGET_OBJECTS:trafficmcmt_mussp_objects>)
+        set(TMCMT_MUSSP_INCLUDE_DIR ${TRAFFICMCMT_MUSSP_SOURCE_DIR}/muSSP)
+    elseif(TARGET mussp::mussp)
+        set(TMCMT_MUSSP_TARGET mussp::mussp)
+    elseif(TARGET mussp)
+        set(TMCMT_MUSSP_TARGET mussp)
+    else()
+        message(WARNING "TrafficMCMT: muSSP target missing -> TRAFFICMCMT_WITH_MUSSP=OFF")
+        set(TRAFFICMCMT_WITH_MUSSP OFF CACHE BOOL "" FORCE)
+    endif()
+endif()
+
+add_library(trafficmcmt_flow STATIC
+    src/flow/FlowAssociator.cpp
+    src/flow/GlobalIdManager.cpp
+    src/flow/GraphPruner.cpp
+    src/flow/SspSolver.cpp
+    src/flow/TrackletGraph.cpp)
+add_library(TrafficMCMT::flow ALIAS trafficmcmt_flow)
+
+target_link_libraries(trafficmcmt_flow
+    PUBLIC
+        trafficmcmt_core)
+
+if(TRAFFICMCMT_WITH_MUSSP)
+    target_sources(trafficmcmt_flow PRIVATE
+        src/flow/MuSspSolver.cpp
+        ${TMCMT_MUSSP_OBJECTS})
+    target_compile_definitions(trafficmcmt_flow PUBLIC TMCMT_WITH_MUSSP=1)
+    if(TMCMT_MUSSP_INCLUDE_DIR)
+        target_include_directories(trafficmcmt_flow PRIVATE ${TMCMT_MUSSP_INCLUDE_DIR})
+    else()
+        target_link_libraries(trafficmcmt_flow PRIVATE ${TMCMT_MUSSP_TARGET})
+    endif()
+endif()
+tmcmt_set_warnings(trafficmcmt_flow)
+
+# ---------------------------------------------------------------------------
+# Metrics: track-level identity metrics (stage 5).
+# ---------------------------------------------------------------------------
+add_library(trafficmcmt_metrics STATIC
+    src/metrics/MotMetrics.cpp)
+add_library(TrafficMCMT::metrics ALIAS trafficmcmt_metrics)
+
+target_link_libraries(trafficmcmt_metrics
+    PUBLIC
+        trafficmcmt_core)
+tmcmt_set_warnings(trafficmcmt_metrics)
+
+# ---------------------------------------------------------------------------
 # Protocol: generated protobuf messages (stage 2).
 # ---------------------------------------------------------------------------
 set(TMCMT_INSTALL_TARGETS
     trafficmcmt_core
     trafficmcmt_emissions
     trafficmcmt_reid
-    trafficmcmt_st)
+    trafficmcmt_st
+    trafficmcmt_flow
+    trafficmcmt_metrics)
 
 if(TRAFFICMCMT_WITH_PROTOBUF)
     set(TMCMT_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
@@ -327,6 +401,18 @@ if(TARGET trafficmcmt_io)
             trafficmcmt_st)
     tmcmt_set_warnings(trafficmcmt_st_estimate)
     tmcmt_copy_runtime_dependencies(trafficmcmt_st_estimate)
+endif()
+
+if(TARGET trafficmcmt_io AND TARGET trafficmcmt_st)
+    add_executable(trafficmcmt_associate apps/associate/main.cpp)
+    target_link_libraries(trafficmcmt_associate
+        PRIVATE
+            trafficmcmt_io
+            trafficmcmt_st
+            trafficmcmt_flow
+            trafficmcmt_metrics)
+    tmcmt_set_warnings(trafficmcmt_associate)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_associate)
 endif()
 
 # ---------------------------------------------------------------------------

@@ -363,6 +363,9 @@ Status ParseFlow(const YAML::Node& root, FlowConfig& out) {
     if (!(status = ReadScalar(node, "max_candidates_per_node", out.max_candidates_per_node, "flow")).ok()) {
         return status;
     }
+    if (!(status = ReadScalar(node, "link_reward", out.link_reward, "flow")).ok()) {
+        return status;
+    }
     if (!(status = ReadScalar(node, "max_component_nodes", out.max_component_nodes, "flow")).ok()) {
         return status;
     }
@@ -690,6 +693,9 @@ Status MasterConfig::Validate() const {
     if (flow.max_candidates_per_node <= 0) {
         return fail("flow.max_candidates_per_node", "must be > 0");
     }
+    if (!(flow.link_reward > 0.0) || !std::isfinite(flow.link_reward)) {
+        return fail("flow.link_reward", "must be a finite value > 0");
+    }
     if (flow.max_component_nodes <= 0) {
         return fail("flow.max_component_nodes", "must be > 0");
     }
@@ -811,6 +817,7 @@ std::string Dump(const MasterConfig& config) {
     root["st"]["gate"]["max_distance_m"] = config.st.gate.max_distance_m;
 
     root["flow"]["solver"] = ToString(config.flow.solver);
+    root["flow"]["link_reward"] = config.flow.link_reward;
     root["flow"]["max_candidates_per_node"] = config.flow.max_candidates_per_node;
     root["flow"]["max_component_nodes"] = config.flow.max_component_nodes;
 

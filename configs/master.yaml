@@ -62,6 +62,8 @@ st:
 flow:
   # mussp | ssp | greedy
   solver: ssp
+  # Transition cost is c_total - link_reward; only negative edges are linked.
+  link_reward: 1.0
   max_candidates_per_node: 15
   max_component_nodes: 20000
 

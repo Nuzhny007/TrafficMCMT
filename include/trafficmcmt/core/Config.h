@@ -126,6 +126,9 @@ struct StConfig {
 
 struct FlowConfig {
     SolverKind solver = SolverKind::Ssp;
+    /// Transition cost is `c_total - link_reward`; only negative edges are
+    /// selected by the MCF solver.
+    double link_reward = 1.0;
     int max_candidates_per_node = 15;
     int max_component_nodes = 20000;
 };

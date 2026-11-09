@@ -195,10 +195,24 @@ if(TRAFFICMCMT_WITH_FAISS)
 endif()
 
 if(TRAFFICMCMT_WITH_MUSSP)
-    find_package(mussp CONFIG QUIET)
-    if(NOT mussp_FOUND)
-        message(WARNING "TrafficMCMT: muSSP not found -> TRAFFICMCMT_WITH_MUSSP=OFF")
-        set(TRAFFICMCMT_WITH_MUSSP OFF CACHE BOOL "" FORCE)
+    # A local source checkout (for example the Nuzhny007/muSSP fork) is the
+    # primary way to enable muSSP: it avoids vendoring third-party sources and
+    # works on machines without an installed package. An installed package is
+    # still supported as a fallback.
+    set(TMCMT_MUSSP_LOCAL FALSE)
+    if(DEFINED TRAFFICMCMT_MUSSP_SOURCE_DIR AND
+       EXISTS "${TRAFFICMCMT_MUSSP_SOURCE_DIR}/muSSP/Graph.cpp")
+        set(TMCMT_MUSSP_LOCAL TRUE)
+        message(STATUS "TrafficMCMT: muSSP sources from ${TRAFFICMCMT_MUSSP_SOURCE_DIR}")
+    else()
+        find_package(mussp CONFIG QUIET)
+        if(NOT mussp_FOUND)
+            message(WARNING
+                "TrafficMCMT: muSSP not found. Set TRAFFICMCMT_MUSSP_SOURCE_DIR "
+                "to a checkout containing muSSP/Graph.cpp, or install the mussp "
+                "package. Disabling TRAFFICMCMT_WITH_MUSSP.")
+            set(TRAFFICMCMT_WITH_MUSSP OFF CACHE BOOL "" FORCE)
+        endif()
     endif()
 endif()
 
