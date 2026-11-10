@@ -28,6 +28,12 @@ TEST(Status, ErrorKeepsCodeAndMessage) {
     EXPECT_EQ(status.ToString(), "parse_error: bad yaml");
 }
 
+TEST(Status, TimeoutIsADistinctErrorCode) {
+    const Status status = Status::Error(ErrorCode::Timeout, "no message");
+    EXPECT_EQ(status.code(), ErrorCode::Timeout);
+    EXPECT_EQ(status.ToString(), "timeout: no message");
+}
+
 TEST(Result, HoldsValue) {
     Result<int> result = 42;
     ASSERT_TRUE(result.has_value());

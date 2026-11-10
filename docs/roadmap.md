@@ -1,7 +1,7 @@
 # TrafficMCMT — roadmap
 
 > **Статус документа:** живая спецификация. Чекбоксы обновляются по мере выполнения.
-> **Версия:** 0.5 · **Дата:** 2026-11-10
+> **Версия:** 0.6 · **Дата:** 2026-11-10
 > **Оценки:** человеко-дни для одного senior C++ разработчика.
 
 ## Сводка
@@ -15,8 +15,8 @@
 | 2c | Gaussian puff: выбросы и концентрации | 4–6 | ✅ | 2b |
 | 3 | FAISS и базовый ReID | 7–10 | 🟡 | 2 |
 | 4 | st-ReID (Camera Link Model) | 8–12 | ✅ | 2, 3 |
-| 5 | muSSP и глобальная ассоциация | 10–14 | ⬜ | 3, 4 |
-| 6 | ZeroMQ транспорт | 6–8 | ⬜ | 2 |
+| 5 | muSSP и глобальная ассоциация | 10–14 | ✅ | 3, 4 |
+| 6 | ZeroMQ транспорт | 6–8 | ✅ | 2 |
 | 7 | Синхронизация времени | 7–10 | ⬜ | 5, 6 |
 | 8 | BEV и мировые координаты | 8–12 | ⬜ | 4 |
 | 9 | Прод-обвязка (опция) | 5–7 | ⬜ | 6, 7 |
@@ -593,20 +593,22 @@ cmake --preset local-release -B build/mussp-check `
 
 ---
 
-## Этап 6. ZeroMQ транспорт (6–8 дней) ⬜
+## Этап 6. ZeroMQ транспорт (6–8 дней) ✅
 
 **Цель:** приём потоков от N камер в реальном времени.
 
 ### Задачи
 
-- [ ] `ZmqContext` (RAII)
-- [ ] `ZmqTrackletSource` (SUB, multipart, фильтр топика, reconnect)
-- [ ] `ZmqTrackletPublisher` (Edge)
-- [ ] `ZmqResultSink` (PUB)
-- [ ] `MessageFramer` — версия, лимит размера, `[topic][payload]`
-- [ ] `SequenceTracker` — пропуски → метрика
-- [ ] `apps/edge_simulator` — N виртуальных камер
-- [ ] `trafficmcmt_broker` (XSUB/XPUB), опционально
+- [x] `ZmqContext` (RAII), `Shutdown()` будит заблокированный `Next()`
+- [x] `ZmqTrackletSource` (SUB, multipart, фильтр топика, reconnect, heartbeat)
+- [x] `ZmqTrackletPublisher` (Edge, неблокирующая PUB-отправка)
+- [x] `ZmqResultSink` (PUB) + `GlobalTrackUpdate` / `GlobalIdMergeEvent` в `proto/global.proto`
+- [x] `MessageFramer` — версия, лимит размера, `[topic][payload]`
+- [x] `SequenceTracker` — пропуски/дубликаты/out-of-order → метрики
+- [x] `apps/edge_simulator` — N виртуальных камер с rate/seed
+- [x] `trafficmcmt_broker` (XSUB/XPUB), опционально
+- [x] `tracklet_inspect --source zmq` — consumer и статистика
+- [x] `ErrorCode::Timeout` в `core/Result.h`
 
 ### DoD
 
@@ -622,6 +624,48 @@ cmake --preset local-release -B build/mussp-check `
 - Детект пропуска `sequence`.
 - Нагрузка 10k msg/s.
 - Chaos: рестарт брокера, обрыв линка.
+
+### Прогресс (2026-11-10)
+
+| Проверка | Результат |
+|---|---|
+| Сборка | `build/zmq-check`, MSVC 19.51 / VS 2026, `ZMQ=ON` — OK |
+| Тесты | `trafficmcmt_net_tests`: **25/25 passed**; полный `ctest` в `build/zmq-check`: **269/269 passed** (1 skipped: muSSP) |
+| DoD-soak (короткий) | 10 камер × 100 трекл./с × 60 с: **60 000 сообщений**, `missing_total=0`, `rejected=0`, `malformed=0`, `send_failures=0` |
+| RSS consumer | дрейф между половинами установившегося окна **2.4%** (цель ±5%) |
+| Нагрузка | 10 000 сообщений PUB→SUB: публикация **9 мс**, end-to-end **50 мс** |
+| Рестарт брокера | подписка и публикация восстанавливаются **< 1 с** |
+| CI-сценарий | `EDGE=OFF, MTT=OFF, PROTOBUF=OFF, MUSSP=OFF, ZMQ=OFF` — без регрессий |
+
+Полный часовой прогон запускается тем же скриптом с `-Duration 3600`
+(в рамках текущей сессии выполнен короткий 60-секундный вариант DoD).
+p99 «ingest → association» будет измерен после подключения `FlowAssociator`
+к `MasterPipeline` (Этап 7); на Этапе 6 проверен транспортный путь
+publish → receive.
+
+### Команды
+
+```powershell
+# конфигурация с ZMQ (требует protobuf и cppzmq из vcpkg)
+cmake -S . -B build/zmq-check -G "Visual Studio 18 2026" -A x64 `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_PREFIX_PATH="C:/work/libraries/spdlog/rel/install;C:/work/libraries/yaml/yaml-cpp_build/install;C:/work/libraries/gtest/rel/install;C:/work/tools/vcpkg/installed/x64-windows" `
+  -DOpenCV_DIR="C:/work/tools/vcpkg/installed/x64-windows/share/opencv4" `
+  -DMTTracking_DIR="C:/work/home/mtracker/TrafficMCMT/Multitarget-tracker/install/lib/MTTracking/cmake" `
+  -DTRAFFICMCMT_WITH_ZMQ=ON
+cmake --build build/zmq-check --config Release --parallel 8
+
+# unit-тесты транспорта
+ctest --test-dir build/zmq-check -C Release --output-on-failure
+
+# smoke: broker + 10 камер × 100 трекл./с × 60 с
+powershell -ExecutionPolicy Bypass -File scripts/smoke_zmq.ps1 `
+  -Duration 60 -Cameras 10 -Rate 100
+
+# полный часовой прогон DoD
+powershell -ExecutionPolicy Bypass -File scripts/smoke_zmq.ps1 `
+  -Duration 3600 -Cameras 10 -Rate 100
+```
 
 ---
 
@@ -736,3 +780,4 @@ cmake --preset local-release -B build/mussp-check `
 | 2026-11-08 | Этап 3 (базовый ReID): `trafficmcmt_reid` (`IEmbeddingIndex`, `BruteForceIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher`), `FaissIndex` под флагом, `reid_eval`, `reid_bench`, `docs/reid-eval.md`; `ctest` 195/195, CI-сценарий 97/97; chunk-split Rank-1 Aire 0.4615 / Auburn 0.7523; brute 200k×512 p99 16.2 мс; FAISS не установлен — бэкенд не проверен |
 | 2026-11-09 | Этап 4 (st-ReID): `trafficmcmt_st` (`CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon`), `st.camera_links`, `configs/camera_links.yaml`, `st_estimate`; `GalleryEntry` получил world-endpoints; `ctest` 233/233, CI-сценарий 135/135; синтетика DoD 5×50 пройдена; smoke `st_estimate` μ=4000 мс, σ=296.52 мс; реальный кросс-камерный GT отсутствует |
 | 2026-11-10 | Этап 5 (глобальная ассоциация): `trafficmcmt_flow` (`TrackletGraph`, `GraphPruner`, `SspSolver`, `MuSspSolver`, `GreedyAssociator`, `FlowAssociator`, `GlobalIdManager`), `trafficmcmt_metrics` (track-level IDF1/IDP/IDR/IDSW), `flow.link_reward`, `trafficmcmt_associate`; `ctest` 251/251 (muSSP skipped), CI-сценарий 153/153, локальный muSSP-форк 217/217; `ssp` и `mussp` дают идентичный результат на Auburn; Master без Edge-зависимостей |
+| 2026-11-10 | Этап 6 (ZeroMQ): `trafficmcmt_net` (`ZmqContext`, `MessageFramer`, `SequenceTracker`, `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink`, `ZmqBroker`), `ErrorCode::Timeout`, `GlobalTrackUpdate`/`GlobalIdMergeEvent` (`proto/global.proto`), `trafficmcmt_broker`, `trafficmcmt_edge_simulator`, `tracklet_inspect --source zmq`, `scripts/smoke_zmq.ps1`; `build/zmq-check` — 25/25 net-тестов, DoD-soak 10×100×60 с: 60 000 сообщений, `missing_total=0`, `send_failures=0`, дрейф RSS 2.4%; CI-сценарий без ZMQ не затронут |

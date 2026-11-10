@@ -7,6 +7,7 @@
 #include <utility>
 #include <vector>
 
+#include "trafficmcmt/core/GlobalTrack.h"
 #include "trafficmcmt/core/Result.h"
 #include "trafficmcmt/core/Types.h"
 
@@ -20,13 +21,10 @@ struct GlobalIdManagerOptions {
     GlobalId first_id = 1;
 };
 
-/// Emitted whenever two already assigned identities are merged.
-struct GlobalIdMergeEvent {
-    GlobalId old_id = kInvalidGlobalId;
-    GlobalId new_id = kInvalidGlobalId;
-    std::string reason;
-    Timestamp ts{};
-};
+/// Emitted whenever two already assigned identities are merged. The type lives
+/// in `core` so that transport and output sinks can use it without depending on
+/// the flow module.
+using GlobalIdMergeEvent = tmcmt::GlobalIdMergeEvent;
 
 /// Stable, monotone global identity registry backed by a union-find.
 ///

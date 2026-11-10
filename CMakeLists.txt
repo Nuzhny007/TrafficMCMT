@@ -215,7 +215,8 @@ if(TRAFFICMCMT_WITH_PROTOBUF)
 
     add_library(trafficmcmt_proto STATIC
         proto/tracklet.proto
-        proto/calibration.proto)
+        proto/calibration.proto
+        proto/global.proto)
     add_library(TrafficMCMT::proto ALIAS trafficmcmt_proto)
 
     target_include_directories(trafficmcmt_proto PUBLIC
@@ -278,13 +279,33 @@ if(TRAFFICMCMT_WITH_MAP AND TARGET trafficmcmt_io)
 endif()
 
 # ---------------------------------------------------------------------------
-# WebSocket transport (RFC 6455). Platform sockets only, no third-party deps.
+# Network transports: WebSocket (RFC 6455) and ZeroMQ (stage 6).
 # ---------------------------------------------------------------------------
-if(TRAFFICMCMT_WITH_WS)
-    add_library(trafficmcmt_net STATIC
-        src/net/WebSocketClient.cpp
-        src/net/WebSocketServer.cpp)
+if(TRAFFICMCMT_WITH_WS OR TRAFFICMCMT_WITH_ZMQ)
+    add_library(trafficmcmt_net STATIC)
     add_library(TrafficMCMT::net ALIAS trafficmcmt_net)
+
+    if(TRAFFICMCMT_WITH_WS)
+        target_sources(trafficmcmt_net PRIVATE
+            src/net/WebSocketClient.cpp
+            src/net/WebSocketServer.cpp)
+    endif()
+
+    if(TRAFFICMCMT_WITH_ZMQ)
+        target_sources(trafficmcmt_net PRIVATE
+            src/net/MessageFramer.cpp
+            src/net/SequenceTracker.cpp
+            src/net/ZmqBroker.cpp
+            src/net/ZmqContext.cpp
+            src/net/ZmqResultSink.cpp
+            src/net/ZmqTrackletPublisher.cpp
+            src/net/ZmqTrackletSource.cpp)
+        target_compile_definitions(trafficmcmt_net PUBLIC TMCMT_WITH_ZMQ=1)
+        target_link_libraries(trafficmcmt_net
+            PUBLIC
+                trafficmcmt_io
+                ${TMCMT_ZMQ_TARGET})
+    endif()
 
     target_link_libraries(trafficmcmt_net
         PUBLIC
@@ -349,6 +370,9 @@ tmcmt_set_warnings(trafficmcmt_master)
 if(TARGET trafficmcmt_io)
     add_executable(trafficmcmt_tracklet_inspect apps/tracklet_inspect/main.cpp)
     target_link_libraries(trafficmcmt_tracklet_inspect PRIVATE trafficmcmt_io)
+    if(TRAFFICMCMT_WITH_ZMQ AND TARGET trafficmcmt_net)
+        target_link_libraries(trafficmcmt_tracklet_inspect PRIVATE trafficmcmt_net)
+    endif()
     tmcmt_set_warnings(trafficmcmt_tracklet_inspect)
     tmcmt_copy_runtime_dependencies(trafficmcmt_tracklet_inspect)
 endif()
@@ -370,12 +394,30 @@ if(TARGET trafficmcmt_map)
     tmcmt_set_warnings(trafficmcmt_map_export)
     tmcmt_copy_runtime_dependencies(trafficmcmt_map_export)
 
-    if(TARGET trafficmcmt_net)
+    if(TRAFFICMCMT_WITH_WS AND TARGET trafficmcmt_net)
         add_executable(trafficmcmt_map_gateway apps/map_gateway/main.cpp)
         target_link_libraries(trafficmcmt_map_gateway PRIVATE trafficmcmt_map trafficmcmt_net)
         tmcmt_set_warnings(trafficmcmt_map_gateway)
         tmcmt_copy_runtime_dependencies(trafficmcmt_map_gateway)
     endif()
+endif()
+
+# ---------------------------------------------------------------------------
+# ZeroMQ applications (stage 6): broker and synthetic Edge cameras.
+# ---------------------------------------------------------------------------
+if(TRAFFICMCMT_WITH_ZMQ AND TARGET trafficmcmt_net)
+    add_executable(trafficmcmt_broker apps/broker/main.cpp)
+    target_link_libraries(trafficmcmt_broker PRIVATE trafficmcmt_net)
+    tmcmt_set_warnings(trafficmcmt_broker)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_broker)
+
+    add_executable(trafficmcmt_edge_simulator apps/edge_simulator/main.cpp)
+    target_link_libraries(trafficmcmt_edge_simulator
+        PRIVATE
+            trafficmcmt_net
+            trafficmcmt_io)
+    tmcmt_set_warnings(trafficmcmt_edge_simulator)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_edge_simulator)
 endif()
 
 # ---------------------------------------------------------------------------

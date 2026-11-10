@@ -5,6 +5,7 @@
 #include <string_view>
 
 #include "trafficmcmt/core/Camera.h"
+#include "trafficmcmt/core/GlobalTrack.h"
 #include "trafficmcmt/core/Result.h"
 #include "trafficmcmt/core/Tracklet.h"
 
@@ -53,6 +54,30 @@ public:
 
     [[nodiscard]] static Result<std::string> EncodeJson(const CameraCalibration& calibration, bool pretty = false);
     [[nodiscard]] static Result<CameraCalibration> DecodeJson(std::string_view json);
+};
+
+/// Master -> consumer messages: global track snapshots and identity merges.
+///
+/// `EncodeBinary` produces a raw `tmcmt.v1.GlobalTrackUpdate` (or
+/// `GlobalIdMergeEvent`) payload, which is what the result sink puts into the
+/// ZeroMQ frame. `EncodeJson` uses the protobuf JSON mapping.
+class GlobalTrackCodec {
+public:
+    [[nodiscard]] static Result<std::string> EncodeBinary(const GlobalTrackUpdate& update,
+                                                          const TrackletCodecOptions& options = {});
+    [[nodiscard]] static Result<GlobalTrackUpdate> DecodeBinary(std::string_view payload);
+
+    [[nodiscard]] static Result<std::string> EncodeJson(const GlobalTrackUpdate& update, bool pretty = false);
+    [[nodiscard]] static Result<GlobalTrackUpdate> DecodeJson(std::string_view json);
+};
+
+class GlobalIdMergeCodec {
+public:
+    [[nodiscard]] static Result<std::string> EncodeBinary(const GlobalIdMergeEvent& event);
+    [[nodiscard]] static Result<GlobalIdMergeEvent> DecodeBinary(std::string_view payload);
+
+    [[nodiscard]] static Result<std::string> EncodeJson(const GlobalIdMergeEvent& event, bool pretty = false);
+    [[nodiscard]] static Result<GlobalIdMergeEvent> DecodeJson(std::string_view json);
 };
 
 } // namespace tmcmt

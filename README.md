@@ -29,7 +29,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 | 3. FAISS и ReID | 🟡 индекс/галереи/матчер и оценка готовы; FAISS не проверен |
 | 4. st-ReID | ✅ Camera Link Model, переходы, гейты, scorer; реальный GT отсутствует |
 | 5. muSSP и глобальная ассоциация | ✅ `ssp`/`greedy`/`mussp`, IDF1/IDSW, offline CLI; muSSP — опционально |
-| 6. ZeroMQ транспорт | ⬜ |
+| 6. ZeroMQ транспорт | ✅ PUB/SUB, broker, result sink, edge simulator; smoke 60k msg без потерь |
 | 7. Синхронизация времени | ⬜ |
 | 8. BEV | ⬜ |
 
@@ -48,6 +48,9 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
   Без muSSP работают `flow.solver=ssp|greedy`.
 - Eigen 3 для ReID (`find_package`, иначе `FetchContent` 3.4.0)
 - FAISS — опционально, `TRAFFICMCMT_WITH_FAISS=ON`; без него используется `BruteForceIndex`
+- ZeroMQ — опционально, `TRAFFICMCMT_WITH_ZMQ=ON` (по умолчанию OFF, требует
+  protobuf). Нужны `cppzmq`/`libzmq` (например, `vcpkg install cppzmq:x64-windows`).
+  Без ZMQ `trafficmcmt_net` собирается только с WebSocket-транспортом.
 
 Локальная сборка MTT (путь по умолчанию для `CMakeUserPresets.json`):
 
@@ -201,6 +204,39 @@ origin. `default_linked: false` — без явных `links` пары не ра
 `trafficmcmt_metrics` — CPU-only (`core`), собираются в CI-сценарии без Edge,
 MTT и protobuf. Детали MCF и метрик — `docs/architecture.md` §8.2, §8.3, §8.6.
 
+ZeroMQ транспорт (Этап 6) — приём потоков от N камер:
+
+```powershell
+# конфигурация с ZMQ (требует protobuf + cppzmq/libzmq)
+cmake -S . -B build/zmq-check -G "Visual Studio 18 2026" -A x64 `
+  -DCMAKE_BUILD_TYPE=Release `
+  -DCMAKE_PREFIX_PATH="C:/work/tools/vcpkg/installed/x64-windows" `
+  -DTRAFFICMCMT_WITH_ZMQ=ON
+cmake --build build/zmq-check --config Release --parallel 8
+
+# broker (XSUB/XPUB): publishers -> :5555, subscribers -> :5556
+.\build\zmq-check\Release\trafficmcmt_broker.exe
+
+# N виртуальных камер
+.\build\zmq-check\Release\trafficmcmt_edge_simulator.exe `
+  --endpoint tcp://127.0.0.1:5555 --cameras 10 --rate 100 --duration 60
+
+# consumer/инспектор поверх SUB
+.\build\zmq-check\Release\trafficmcmt_tracklet_inspect.exe `
+  --source zmq --endpoint tcp://127.0.0.1:5556 --duration 60
+
+# end-to-end smoke: broker + 10 камер x 100 трекл./с x 60 с
+powershell -ExecutionPolicy Bypass -File scripts/smoke_zmq.ps1 `
+  -Duration 60 -Cameras 10 -Rate 100
+```
+
+Топики — `tmcmt.v1.<camera>.tracklet` и `tmcmt.v1.global.{track,events}`,
+сообщение — multipart `[topic][payload]` с protobuf `TrackletChunk` /
+`GlobalTrackUpdate` / `GlobalIdMergeEvent`. PUB-отправка неблокирующая:
+переполнение очереди учитывается в `send_failures`, а не тормозит трекер.
+`ZmqTrackletSource` считает `missing_total`/`duplicates`/`out_of_order` по
+`sequence` на камеру. Схема и параметры — `docs/architecture.md` §7.8.
+
 ## Структура
 
 ```
@@ -209,13 +245,14 @@ include/trafficmcmt/io/     codec, file source/sinks, normalizer, store
 include/trafficmcmt/edge/   ReID-экстракторы, EdgeTrackExporter, GeoBinding
 include/trafficmcmt/mtt/    адаптер Multitarget-tracker → Observation
 include/trafficmcmt/map/    MapFeed, MapProtocol, MapConfig, timeline, velocity, trail
-include/trafficmcmt/net/    WebSocket-сервер/клиент (RFC 6455, без зависимостей)
+include/trafficmcmt/net/    ZeroMQ-транспорт (context, framer, source, publisher, result sink, broker)
+                            и WebSocket-сервер/клиент (RFC 6455, без зависимостей)
 include/trafficmcmt/emissions/  HBEFA, Pasquill-Gifford, Gaussian puff, сетка концентраций
 include/trafficmcmt/reid/   IEmbeddingIndex, BruteForceIndex, FaissIndex, GalleryManager, ReIdMatcher
 include/trafficmcmt/st/     CameraLinkModel, TransitionEstimator, SpatialGate, StReIdScorer, PairCandidateGenerator
 include/trafficmcmt/flow/   TrackletGraph, GraphPruner, McfSolver, FlowAssociator, GlobalIdManager
 include/trafficmcmt/metrics/  MotMetrics (track-level IDF1/IDP/IDR/IDSW)
-proto/                      protobuf-схемы v1 (tracklet, calibration)
+proto/                      protobuf-схемы v1 (tracklet, calibration, global)
 src/                        реализации core/io/edge/mtt/map/net/emissions/reid/st/flow/metrics
 apps/master_node/           точка входа Master
 apps/mtt_export/            видео → треклеты (Edge, OpenCV + MTT)
@@ -226,11 +263,13 @@ apps/reid_eval/             CMC/Rank-1/mAP (chunk-split и manifest)
 apps/reid_bench/            латентность, QPS, recall@k индекса
 apps/st_estimate/           размеченные пары → статистика переходов → camera_links.yaml
 apps/associate/             offline-ассоциация: треклеты → глобальные ID + IDF1/IDSW
+apps/broker/                XSUB/XPUB-форвардер для ZeroMQ
+apps/edge_simulator/        N виртуальных камер для нагрузочных прогонов
 tests/unit/                 unit-тесты (GTest)
 configs/                    примеры конфигурации (включая map_feed*.yaml, camera_links.yaml)
 cmake/                      зависимости, warnings, runtime-DLL, package config
 docs/                       архитектура, roadmap, оценка ReID
-scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway, reid_eval_*
+scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway, smoke_zmq, reid_eval_*
 ```
 
 Viewer (`traffic-mcmt-viewer`) — отдельный репозиторий: React + deck.gl + MapLibre,

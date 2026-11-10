@@ -16,6 +16,8 @@ const char* ToString(ErrorCode code) noexcept {
         return "parse_error";
     case ErrorCode::Unsupported:
         return "unsupported";
+    case ErrorCode::Timeout:
+        return "timeout";
     case ErrorCode::Internal:
         return "internal";
     }

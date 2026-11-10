@@ -1,4 +1,7 @@
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <csignal>
 #include <cstddef>
 #include <cstdint>
 #include <exception>
@@ -15,6 +18,7 @@
 #include "trafficmcmt/core/Version.h"
 #include "trafficmcmt/io/FileTrackletSource.h"
 #include "trafficmcmt/io/TrackletCodec.h"
+#include "trafficmcmt/net/ZmqTrackletSource.h"
 
 namespace {
 
@@ -22,12 +26,24 @@ constexpr int kExitOk = 0;
 constexpr int kExitUsageError = 2;
 constexpr int kExitDataError = 3;
 
+std::atomic<bool> g_stop{false};
+
+void HandleSignal(int) {
+    g_stop.store(true);
+}
+
 struct Options {
     std::string path;
+    std::string source = "file";
     tmcmt::TrackletFileFormat format = tmcmt::TrackletFileFormat::Auto;
     std::size_t limit = 0;
     bool printJson = false;
     bool pretty = false;
+    std::string endpoint = "tcp://127.0.0.1:5556";
+    std::string subscribePrefix = "tmcmt.v1.";
+    int timeoutMs = 1'000;
+    int durationSeconds = 0;
+    int statsIntervalSeconds = 10;
     bool showHelp = false;
     bool showVersion = false;
 };
@@ -35,12 +51,18 @@ struct Options {
 void PrintUsage(std::string_view program) {
     std::cout << "TrafficMCMT tracklet inspector " << tmcmt::kVersion << " (protocol v" << tmcmt::kProtocolVersion
               << ")\n\n"
-              << "Usage: " << program << " <tracklets.jsonl|tracklets.bin> [options]\n\n"
+              << "Usage: " << program << " <tracklets.jsonl|tracklets.bin> [options]\n"
+              << "       " << program << " --source zmq --endpoint tcp://host:5556 [options]\n\n"
               << "Options:\n"
+              << "  --source <kind>  file|zmq (default: file)\n"
               << "  --format <fmt>   auto|jsonl|protobuf (default: auto)\n"
               << "  --limit <n>      Read at most n tracklets (0 = no limit)\n"
               << "  --json           Print every tracklet as protobuf JSON\n"
               << "  --pretty         Pretty-print JSON output\n"
+              << "  --endpoint <ep>  ZeroMQ SUB endpoint (default: tcp://127.0.0.1:5556)\n"
+              << "  --prefix <p>     ZeroMQ subscription prefix (default: tmcmt.v1.)\n"
+              << "  --timeout-ms <n> Per-message timeout (default: 1000)\n"
+              << "  --duration <s>   Stop after this many seconds (0 = until Ctrl+C)\n"
               << "  --version        Print version and exit\n"
               << "  -h, --help       Print this help and exit\n";
 }
@@ -65,6 +87,64 @@ std::optional<Options> ParseArgs(int argc, char** argv, std::string& error) {
             options.printJson = true;
         } else if (arg == "--pretty") {
             options.pretty = true;
+        } else if (arg == "--source") {
+            auto value = nextValue("--source");
+            if (!value) {
+                return std::nullopt;
+            }
+            if (tmcmt::detail::EqualsIgnoreCase(*value, "file")) {
+                options.source = "file";
+            } else if (tmcmt::detail::EqualsIgnoreCase(*value, "zmq")) {
+                options.source = "zmq";
+            } else {
+                error = "unknown source '" + *value + "', expected one of: file|zmq";
+                return std::nullopt;
+            }
+        } else if (arg == "--endpoint") {
+            auto value = nextValue("--endpoint");
+            if (!value) {
+                return std::nullopt;
+            }
+            options.endpoint = std::move(*value);
+        } else if (arg == "--prefix") {
+            auto value = nextValue("--prefix");
+            if (!value) {
+                return std::nullopt;
+            }
+            options.subscribePrefix = std::move(*value);
+        } else if (arg == "--timeout-ms") {
+            auto value = nextValue("--timeout-ms");
+            if (!value) {
+                return std::nullopt;
+            }
+            try {
+                options.timeoutMs = std::stoi(*value);
+            } catch (const std::exception&) {
+                error = "invalid value for --timeout-ms: " + *value;
+                return std::nullopt;
+            }
+        } else if (arg == "--duration") {
+            auto value = nextValue("--duration");
+            if (!value) {
+                return std::nullopt;
+            }
+            try {
+                options.durationSeconds = std::stoi(*value);
+            } catch (const std::exception&) {
+                error = "invalid value for --duration: " + *value;
+                return std::nullopt;
+            }
+        } else if (arg == "--stats-interval") {
+            auto value = nextValue("--stats-interval");
+            if (!value) {
+                return std::nullopt;
+            }
+            try {
+                options.statsIntervalSeconds = std::stoi(*value);
+            } catch (const std::exception&) {
+                error = "invalid value for --stats-interval: " + *value;
+                return std::nullopt;
+            }
         } else if (arg == "--format") {
             auto value = nextValue("--format");
             if (!value) {
@@ -105,7 +185,7 @@ std::optional<Options> ParseArgs(int argc, char** argv, std::string& error) {
         }
     }
 
-    if (!options.showHelp && !options.showVersion && options.path.empty()) {
+    if (!options.showHelp && !options.showVersion && options.source == "file" && options.path.empty()) {
         error = "missing input file";
         return std::nullopt;
     }
@@ -158,67 +238,8 @@ void Accumulate(Stats& stats, const tmcmt::Tracklet& tracklet, std::size_t bytes
     }
 }
 
-} // namespace
-
-int main(int argc, char** argv) {
-    std::string parseError;
-    std::optional<Options> options = ParseArgs(argc, argv, parseError);
-    if (!options) {
-        std::cerr << "error: " << parseError << "\n\n";
-        PrintUsage(argc > 0 ? argv[0] : "trafficmcmt_tracklet_inspect");
-        return kExitUsageError;
-    }
-    if (options->showHelp) {
-        PrintUsage(argc > 0 ? argv[0] : "trafficmcmt_tracklet_inspect");
-        return kExitOk;
-    }
-    if (options->showVersion) {
-        std::cout << "TrafficMCMT " << tmcmt::kVersion << " (protocol v" << tmcmt::kProtocolVersion << ")\n";
-        return kExitOk;
-    }
-
-    tmcmt::FileTrackletSource::Options sourceOptions;
-    sourceOptions.format = options->format;
-    sourceOptions.speed = 0.0; // Never pace an offline inspection.
-
-    auto source = tmcmt::FileTrackletSource::Open(options->path, sourceOptions);
-    if (!source) {
-        std::cerr << "error: " << source.status().ToString() << '\n';
-        return kExitDataError;
-    }
-
-    Stats stats;
-    std::size_t lineBytes = 0;
-    tmcmt::Tracklet tracklet;
-    for (;;) {
-        auto next = source.value()->Next(tracklet);
-        if (!next) {
-            std::cerr << "error: " << next.status().ToString() << '\n';
-            return kExitDataError;
-        }
-        if (!next.value()) {
-            break;
-        }
-
-        auto encoded = tmcmt::TrackletCodec::EncodeBinary(tracklet);
-        lineBytes = encoded ? encoded.value().size() : 0;
-        Accumulate(stats, tracklet, lineBytes);
-
-        if (options->printJson) {
-            auto json = tmcmt::TrackletCodec::EncodeJson(tracklet, options->pretty);
-            if (!json) {
-                std::cerr << "error: " << json.status().ToString() << '\n';
-                return kExitDataError;
-            }
-            std::cout << json.value() << '\n';
-        }
-
-        if (options->limit != 0 && stats.tracklets >= options->limit) {
-            break;
-        }
-    }
-
-    std::cout << "file: " << source.value()->Describe() << '\n'
+void PrintSummary(const Stats& stats, const std::string& sourceLine) {
+    std::cout << sourceLine << '\n'
               << "tracklets: " << stats.tracklets << '\n'
               << "observations: " << stats.observations << '\n'
               << "final_chunks: " << stats.finalChunks << '\n'
@@ -265,6 +286,162 @@ int main(int argc, char** argv) {
         }
         std::cout << '\n';
     }
+}
 
+} // namespace
+
+int main(int argc, char** argv) {
+    std::string parseError;
+    std::optional<Options> options = ParseArgs(argc, argv, parseError);
+    if (!options) {
+        std::cerr << "error: " << parseError << "\n\n";
+        PrintUsage(argc > 0 ? argv[0] : "trafficmcmt_tracklet_inspect");
+        return kExitUsageError;
+    }
+    if (options->showHelp) {
+        PrintUsage(argc > 0 ? argv[0] : "trafficmcmt_tracklet_inspect");
+        return kExitOk;
+    }
+    if (options->showVersion) {
+        std::cout << "TrafficMCMT " << tmcmt::kVersion << " (protocol v" << tmcmt::kProtocolVersion << ")\n";
+        return kExitOk;
+    }
+
+    Stats stats;
+    tmcmt::Tracklet tracklet;
+
+#ifdef TMCMT_WITH_ZMQ
+    if (options->source == "zmq") {
+        tmcmt::net::ZmqSourceOptions zmqOptions;
+        zmqOptions.endpoint = options->endpoint;
+        zmqOptions.bind = false;
+        zmqOptions.subscribe_prefix = options->subscribePrefix;
+        zmqOptions.timeout_ms = options->timeoutMs;
+        zmqOptions.normalize = true;
+        zmqOptions.strict = false;
+
+        tmcmt::net::ZmqTrackletSource source;
+        const auto startStatus = source.Start(zmqOptions);
+        if (!startStatus.ok()) {
+            std::cerr << "error: " << startStatus.ToString() << '\n';
+            return kExitDataError;
+        }
+
+        std::signal(SIGINT, HandleSignal);
+        std::signal(SIGTERM, HandleSignal);
+
+        const auto start = std::chrono::steady_clock::now();
+        std::size_t timeouts = 0;
+        for (;;) {
+            if (g_stop.load()) {
+                break;
+            }
+
+            auto next = source.Next(tracklet);
+            if (!next) {
+                if (next.status().code() == tmcmt::ErrorCode::Timeout) {
+                    ++timeouts;
+                    if (options->durationSeconds > 0 &&
+                        std::chrono::steady_clock::now() - start >=
+                            std::chrono::seconds(options->durationSeconds)) {
+                        break;
+                    }
+                    continue;
+                }
+                std::cerr << "error: " << next.status().ToString() << '\n';
+                source.Stop();
+                return kExitDataError;
+            }
+            if (!next.value()) {
+                break;
+            }
+
+            auto encoded = tmcmt::TrackletCodec::EncodeBinary(tracklet);
+            const std::size_t lineBytes = encoded ? encoded.value().size() : 0;
+            Accumulate(stats, tracklet, lineBytes);
+
+            if (options->printJson) {
+                auto json = tmcmt::TrackletCodec::EncodeJson(tracklet, options->pretty);
+                if (!json) {
+                    std::cerr << "error: " << json.status().ToString() << '\n';
+                    source.Stop();
+                    return kExitDataError;
+                }
+                std::cout << json.value() << '\n';
+            }
+
+            if (options->limit != 0 && stats.tracklets >= options->limit) {
+                break;
+            }
+            if (options->durationSeconds > 0 &&
+                std::chrono::steady_clock::now() - start >=
+                    std::chrono::seconds(options->durationSeconds)) {
+                break;
+            }
+        }
+
+        const std::string endpoint = source.endpoint();
+        const tmcmt::net::ZmqSourceStats sourceStats = source.stats();
+        source.Stop();
+
+        PrintSummary(stats, "source: zmq(" + endpoint + ")");
+        std::cout << "zmq_received: " << sourceStats.received << '\n'
+                  << "zmq_decoded: " << sourceStats.decoded << '\n'
+                  << "zmq_rejected: " << sourceStats.rejected << '\n'
+                  << "zmq_malformed: " << sourceStats.malformed << '\n'
+                  << "zmq_duplicates: " << sourceStats.duplicates << '\n'
+                  << "zmq_missing_total: " << sourceStats.missing_total << '\n'
+                  << "zmq_out_of_order: " << sourceStats.out_of_order << '\n'
+                  << "zmq_timeouts: " << timeouts << '\n'
+                  << "zmq_bytes_received: " << sourceStats.bytes_received << '\n';
+        return kExitOk;
+    }
+#else
+    if (options->source == "zmq") {
+        std::cerr << "error: this build has no ZeroMQ transport "
+                     "(configure with -DTRAFFICMCMT_WITH_ZMQ=ON)\n";
+        return kExitDataError;
+    }
+#endif
+
+    tmcmt::FileTrackletSource::Options sourceOptions;
+    sourceOptions.format = options->format;
+    sourceOptions.speed = 0.0; // Never pace an offline inspection.
+
+    auto source = tmcmt::FileTrackletSource::Open(options->path, sourceOptions);
+    if (!source) {
+        std::cerr << "error: " << source.status().ToString() << '\n';
+        return kExitDataError;
+    }
+
+    for (;;) {
+        auto next = source.value()->Next(tracklet);
+        if (!next) {
+            std::cerr << "error: " << next.status().ToString() << '\n';
+            return kExitDataError;
+        }
+        if (!next.value()) {
+            break;
+        }
+
+        auto encoded = tmcmt::TrackletCodec::EncodeBinary(tracklet);
+        const std::size_t lineBytes = encoded ? encoded.value().size() : 0;
+        Accumulate(stats, tracklet, lineBytes);
+
+        if (options->printJson) {
+            auto json = tmcmt::TrackletCodec::EncodeJson(tracklet, options->pretty);
+            if (!json) {
+                std::cerr << "error: " << json.status().ToString() << '\n';
+                return kExitDataError;
+            }
+            std::cout << json.value() << '\n';
+        }
+
+        if (options->limit != 0 && stats.tracklets >= options->limit) {
+            break;
+        }
+    }
+
+    PrintSummary(stats, "file: " + source.value()->Describe());
     return kExitOk;
 }

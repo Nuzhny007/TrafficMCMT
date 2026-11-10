@@ -179,10 +179,37 @@ endif()
 # ---------------------------------------------------------------------------
 
 if(TRAFFICMCMT_WITH_ZMQ)
-    find_package(cppzmq CONFIG QUIET)
-    if(NOT cppzmq_FOUND)
-        message(WARNING "TrafficMCMT: cppzmq not found -> TRAFFICMCMT_WITH_ZMQ=OFF")
+    if(NOT TRAFFICMCMT_WITH_PROTOBUF)
+        message(WARNING
+            "TrafficMCMT: ZeroMQ transport needs the protobuf protocol "
+            "-> TRAFFICMCMT_WITH_ZMQ=OFF")
         set(TRAFFICMCMT_WITH_ZMQ OFF CACHE BOOL "" FORCE)
+    else()
+        # cppzmq is header-only and pulls in libzmq. The transport uses the
+        # plain C API (`zmq.h`) so either target is acceptable.
+        find_package(cppzmq CONFIG QUIET)
+        if(TARGET cppzmq::cppzmq)
+            set(TMCMT_ZMQ_TARGET cppzmq::cppzmq)
+        elseif(TARGET cppzmq)
+            set(TMCMT_ZMQ_TARGET cppzmq)
+        elseif(TARGET cppzmq-static)
+            set(TMCMT_ZMQ_TARGET cppzmq-static)
+        else()
+            find_package(ZeroMQ CONFIG QUIET)
+            if(TARGET libzmq)
+                set(TMCMT_ZMQ_TARGET libzmq)
+            elseif(TARGET libzmq-static)
+                set(TMCMT_ZMQ_TARGET libzmq-static)
+            else()
+                message(WARNING
+                    "TrafficMCMT: ZeroMQ/cppzmq not found "
+                    "-> TRAFFICMCMT_WITH_ZMQ=OFF")
+                set(TRAFFICMCMT_WITH_ZMQ OFF CACHE BOOL "" FORCE)
+            endif()
+        endif()
+        if(TRAFFICMCMT_WITH_ZMQ)
+            message(STATUS "TrafficMCMT: ZeroMQ via ${TMCMT_ZMQ_TARGET}")
+        endif()
     endif()
 endif()
 
@@ -236,7 +263,7 @@ message(STATUS "TrafficMCMT options: "
 set(TMCMT_COPY_RUNTIME_SCRIPT "${CMAKE_CURRENT_LIST_DIR}/CopyRuntimeDependencies.cmake")
 
 set(TRAFFICMCMT_RUNTIME_DIRS "")
-foreach(_tmcmt_prefix_var Protobuf_DIR OpenCV_DIR)
+foreach(_tmcmt_prefix_var Protobuf_DIR OpenCV_DIR cppzmq_DIR ZeroMQ_DIR)
     if(DEFINED ${_tmcmt_prefix_var})
         get_filename_component(_tmcmt_prefix "${${_tmcmt_prefix_var}}/../.." ABSOLUTE)
         if(EXISTS "${_tmcmt_prefix}/bin")

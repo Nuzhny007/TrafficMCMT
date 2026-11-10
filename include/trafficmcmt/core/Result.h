@@ -15,6 +15,7 @@ enum class ErrorCode : std::uint8_t {
     IoError,
     ParseError,
     Unsupported,
+    Timeout,
     Internal,
 };
 

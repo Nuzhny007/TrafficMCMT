@@ -12,6 +12,7 @@
 #include <google/protobuf/util/json_util.h>
 
 #include "calibration.pb.h"
+#include "global.pb.h"
 #include "tracklet.pb.h"
 #include "trafficmcmt/core/TrackletId.h"
 #include "trafficmcmt/core/Version.h"
@@ -140,6 +141,30 @@ void ToProto(const Tracklet& tracklet, proto::TrackletChunk& out, const Tracklet
     out.set_kind(tracklet.is_end ? proto::MESSAGE_KIND_TRACK_END : proto::MESSAGE_KIND_TRACKLET);
     out.set_origin_lat(tracklet.origin_latitude);
     out.set_origin_lon(tracklet.origin_longitude);
+}
+
+void ToProto(const GlobalTrackUpdate& update, proto::GlobalTrackUpdate& out, const TrackletCodecOptions& options) {
+    out.Clear();
+    out.set_schema_version(kProtocolVersion);
+    out.set_global_id(update.global_id);
+
+    out.mutable_segments()->Reserve(static_cast<int>(update.segments.size()));
+    for (const Tracklet& segment : update.segments) {
+        ToProto(segment, *out.add_segments(), options);
+    }
+
+    out.set_type(ToProto(update.type));
+    out.set_is_final(update.is_final);
+    out.set_updated_ms(static_cast<std::int64_t>(update.updated_at.count()));
+}
+
+void ToProto(const GlobalIdMergeEvent& event, proto::GlobalIdMergeEvent& out) {
+    out.Clear();
+    out.set_schema_version(kProtocolVersion);
+    out.set_old_id(event.old_id);
+    out.set_new_id(event.new_id);
+    out.set_reason(event.reason);
+    out.set_timestamp_ms(static_cast<std::int64_t>(event.ts.count()));
 }
 
 void ToProto(const CameraCalibration& calibration, proto::CameraCalibration& out) {
@@ -335,6 +360,49 @@ Result<CameraCalibration> FromProto(const proto::CameraCalibration& message) {
     return out;
 }
 
+Result<GlobalTrackUpdate> FromProto(const proto::GlobalTrackUpdate& message) {
+    if (message.schema_version() != kProtocolVersion) {
+        return MakeStatus(ErrorCode::Unsupported,
+                          "unsupported global schema_version " + std::to_string(message.schema_version()) +
+                              ", expected " + std::to_string(kProtocolVersion));
+    }
+    if (message.global_id() == kInvalidGlobalId) {
+        return MakeStatus(ErrorCode::InvalidArgument, "global_id must not be zero");
+    }
+
+    GlobalTrackUpdate out;
+    out.global_id = message.global_id();
+    out.segments.reserve(static_cast<std::size_t>(message.segments_size()));
+    for (const proto::TrackletChunk& segment : message.segments()) {
+        auto converted = FromProto(segment);
+        if (!converted) {
+            return converted.status();
+        }
+        out.segments.push_back(std::move(converted).value());
+    }
+    out.type = FromProto(message.type());
+    out.is_final = message.is_final();
+    out.updated_at = Timestamp(message.updated_ms());
+    return out;
+}
+
+Result<GlobalIdMergeEvent> FromProto(const proto::GlobalIdMergeEvent& message) {
+    if (message.schema_version() != kProtocolVersion) {
+        return MakeStatus(ErrorCode::Unsupported,
+                          "unsupported merge event schema_version " + std::to_string(message.schema_version()));
+    }
+    if (message.old_id() == kInvalidGlobalId || message.new_id() == kInvalidGlobalId) {
+        return MakeStatus(ErrorCode::InvalidArgument, "merge event ids must not be zero");
+    }
+
+    GlobalIdMergeEvent out;
+    out.old_id = message.old_id();
+    out.new_id = message.new_id();
+    out.reason = message.reason();
+    out.ts = Timestamp(message.timestamp_ms());
+    return out;
+}
+
 // ---------------------------------------------------------------------------
 // Framing
 // ---------------------------------------------------------------------------
@@ -515,6 +583,81 @@ Result<std::string> CalibrationCodec::EncodeJson(const CameraCalibration& calibr
 
 Result<CameraCalibration> CalibrationCodec::DecodeJson(std::string_view json) {
     auto message = JsonToMessage<proto::CameraCalibration>(json);
+    if (!message) {
+        return message.status();
+    }
+    return FromProto(message.value());
+}
+
+// ---------------------------------------------------------------------------
+// GlobalTrackCodec
+// ---------------------------------------------------------------------------
+
+Result<std::string> GlobalTrackCodec::EncodeBinary(const GlobalTrackUpdate& update,
+                                                   const TrackletCodecOptions& options) {
+    proto::GlobalTrackUpdate message;
+    ToProto(update, message, options);
+
+    std::string payload;
+    if (!message.SerializeToString(&payload)) {
+        return MakeStatus(ErrorCode::Internal, "protobuf serialization failed");
+    }
+    return payload;
+}
+
+Result<GlobalTrackUpdate> GlobalTrackCodec::DecodeBinary(std::string_view payload) {
+    proto::GlobalTrackUpdate message;
+    if (!message.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+        return MakeStatus(ErrorCode::ParseError, "cannot parse GlobalTrackUpdate protobuf message");
+    }
+    return FromProto(message);
+}
+
+Result<std::string> GlobalTrackCodec::EncodeJson(const GlobalTrackUpdate& update, bool pretty) {
+    proto::GlobalTrackUpdate message;
+    ToProto(update, message, TrackletCodecOptions{});
+    return MessageToJson(message, pretty);
+}
+
+Result<GlobalTrackUpdate> GlobalTrackCodec::DecodeJson(std::string_view json) {
+    auto message = JsonToMessage<proto::GlobalTrackUpdate>(json);
+    if (!message) {
+        return message.status();
+    }
+    return FromProto(message.value());
+}
+
+// ---------------------------------------------------------------------------
+// GlobalIdMergeCodec
+// ---------------------------------------------------------------------------
+
+Result<std::string> GlobalIdMergeCodec::EncodeBinary(const GlobalIdMergeEvent& event) {
+    proto::GlobalIdMergeEvent message;
+    ToProto(event, message);
+
+    std::string payload;
+    if (!message.SerializeToString(&payload)) {
+        return MakeStatus(ErrorCode::Internal, "protobuf serialization failed");
+    }
+    return payload;
+}
+
+Result<GlobalIdMergeEvent> GlobalIdMergeCodec::DecodeBinary(std::string_view payload) {
+    proto::GlobalIdMergeEvent message;
+    if (!message.ParseFromArray(payload.data(), static_cast<int>(payload.size()))) {
+        return MakeStatus(ErrorCode::ParseError, "cannot parse GlobalIdMergeEvent protobuf message");
+    }
+    return FromProto(message);
+}
+
+Result<std::string> GlobalIdMergeCodec::EncodeJson(const GlobalIdMergeEvent& event, bool pretty) {
+    proto::GlobalIdMergeEvent message;
+    ToProto(event, message);
+    return MessageToJson(message, pretty);
+}
+
+Result<GlobalIdMergeEvent> GlobalIdMergeCodec::DecodeJson(std::string_view json) {
+    auto message = JsonToMessage<proto::GlobalIdMergeEvent>(json);
     if (!message) {
         return message.status();
     }

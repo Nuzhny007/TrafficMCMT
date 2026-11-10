@@ -114,21 +114,30 @@ if(TARGET trafficmcmt_edge)
 endif()
 
 if(TARGET trafficmcmt_net)
-    add_executable(trafficmcmt_net_tests
-        unit/test_ws.cpp)
+    set(TMCMT_NET_TEST_SOURCES)
+    if(TRAFFICMCMT_WITH_WS)
+        list(APPEND TMCMT_NET_TEST_SOURCES unit/test_ws.cpp)
+    endif()
+    if(TRAFFICMCMT_WITH_ZMQ)
+        list(APPEND TMCMT_NET_TEST_SOURCES unit/test_zmq.cpp)
+    endif()
 
-    target_link_libraries(trafficmcmt_net_tests
-        PRIVATE
-            trafficmcmt_net
-            GTest::gtest_main)
+    if(TMCMT_NET_TEST_SOURCES)
+        add_executable(trafficmcmt_net_tests ${TMCMT_NET_TEST_SOURCES})
 
-    # `test_ws.cpp` uses the internal socket helpers for the `/health` check.
-    target_include_directories(trafficmcmt_net_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/net)
+        target_link_libraries(trafficmcmt_net_tests
+            PRIVATE
+                trafficmcmt_net
+                GTest::gtest_main)
 
-    tmcmt_set_warnings(trafficmcmt_net_tests)
-    tmcmt_copy_runtime_dependencies(trafficmcmt_net_tests)
+        # `test_ws.cpp` uses the internal socket helpers for the `/health` check.
+        target_include_directories(trafficmcmt_net_tests PRIVATE ${CMAKE_SOURCE_DIR}/src/net)
 
-    gtest_discover_tests(trafficmcmt_net_tests
-        DISCOVERY_MODE PRE_TEST
-        DISCOVERY_TIMEOUT 30)
+        tmcmt_set_warnings(trafficmcmt_net_tests)
+        tmcmt_copy_runtime_dependencies(trafficmcmt_net_tests)
+
+        gtest_discover_tests(trafficmcmt_net_tests
+            DISCOVERY_MODE PRE_TEST
+            DISCOVERY_TIMEOUT 30)
+    endif()
 endif()

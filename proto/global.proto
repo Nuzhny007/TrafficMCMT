@@ -1,0 +1,40 @@
+// TrafficMCMT global result protocol, version 1.
+//
+// Master -> consumers: global track snapshots and identity merge events.
+// Tracklet segments reuse `TrackletChunk` from tracklet.proto so that the
+// Edge -> Master and Master -> consumer payloads stay identical.
+
+syntax = "proto3";
+
+package tmcmt.v1;
+
+import "tracklet.proto";
+
+option cc_enable_arenas = true;
+
+message GlobalTrackUpdate {
+    // Protocol version. Readers accept 1 only.
+    uint32 schema_version = 1;
+
+    uint64 global_id = 2;
+
+    // Single-camera chunks that belong to this identity. May be empty for a
+    // removal-only update.
+    repeated TrackletChunk segments = 3;
+
+    ObjectType type = 4;
+
+    // True when the identity is frozen and will not change anymore.
+    bool is_final = 5;
+
+    // UTC milliseconds of this snapshot.
+    int64 updated_ms = 6;
+}
+
+message GlobalIdMergeEvent {
+    uint32 schema_version = 1;
+    uint64 old_id = 2;
+    uint64 new_id = 3;
+    string reason = 4;
+    int64 timestamp_ms = 5;
+}

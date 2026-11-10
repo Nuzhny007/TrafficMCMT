@@ -70,7 +70,9 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | yaml-cpp | `C:\work\libraries\yaml\yaml-cpp_build\install` | `yaml-cpp::yaml-cpp` |
 | GTest | `C:\work\libraries\gtest\rel\install` | `GTest::gtest_main` |
 | Eigen | `C:\work\libraries\eigen-3.4.0` | header-only |
-| ZeroMQ / FAISS / muSSP | — | **не установлены**, подключаются на Этапах 3, 5, 6 |
+| ZeroMQ (libzmq/cppzmq) | `C:\work\tools\vcpkg\installed\x64-windows` | 4.3.5 / 4.11.0, feature `transport` |
+| FAISS | — | **не установлен**, Этап 3 (сборка возможна без него) |
+| muSSP | `C:\work\home\mtracker\tmp\muSSP` | локальный форк, `TRAFFICMCMT_MUSSP_SOURCE_DIR` |
 
 Следствия:
 
@@ -103,8 +105,9 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | Компилятор | MSVC 19.51.36231 (Visual Studio 2026) |
 | CMake | 4.3.2, генератор `Visual Studio 18 2026` |
 | Конфигурация | `cmake --preset local-release` |
-| Результат | `trafficmcmt_core`, `trafficmcmt_proto`, `trafficmcmt_io`, `trafficmcmt_edge`, `trafficmcmt_mtt`, `trafficmcmt_master`, `trafficmcmt_mtt_export`, `trafficmcmt_tracklet_inspect` |
-| Тесты | `ctest --preset local-release` → 84/84 passed |
+| Результат | `trafficmcmt_core`, `trafficmcmt_proto`, `trafficmcmt_io`, `trafficmcmt_edge`, `trafficmcmt_mtt`, `trafficmcmt_master`, `trafficmcmt_mtt_export`, `trafficmcmt_tracklet_inspect`, `trafficmcmt_net`, `trafficmcmt_map`, `trafficmcmt_emissions`, `trafficmcmt_reid`, `trafficmcmt_st`, `trafficmcmt_flow`, `trafficmcmt_metrics` |
+| Тесты | `ctest --preset local-release` → 252/252 passed (1 skipped: muSSP выключен) |
+| ZMQ-сборка | `build/zmq-check` (`ZMQ=ON`): полный `ctest` → 269/269 passed (1 skipped: muSSP), `trafficmcmt_net_tests` → 25/25 |
 | Зависимости Master | только runtime MSVC/Windows — без OpenCV, CUDA, MTT |
 
 Опции CMake по умолчанию: `MTT=ON`, `ZMQ=OFF`, `PROTOBUF=OFF`, `FAISS=OFF`,
@@ -184,14 +187,14 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | Таргет | Ключевые классы | Зависимости |
 |---|---|---|
 | `trafficmcmt_core` | `Tracklet`, `CameraCalibration`, `MasterConfig`, `Result<T>`, `Log` | spdlog, yaml-cpp |
-| `trafficmcmt_proto` | сгенерированные `tracklet.pb.*`, `calibration.pb.*` | protobuf |
+| `trafficmcmt_proto` | сгенерированные `tracklet.pb.*`, `calibration.pb.*`, `global.pb.*` | protobuf |
 | `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `TrackletNormalizer`, `InMemoryTrackletStore`, `JsonlTrackletSink`, `BinaryTrackletSink` | protobuf |
 | `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `TypeAwareReIdExtractor`, `GeoBinding`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn, calib3d) |
 | `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
 | `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon` | core, reid (Eigen) |
 | `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `GreedyAssociator`, `FlowAssociator`, `GlobalIdManager` | core, muSSP (opt.) |
 | `trafficmcmt_bev` | `HomographyProjector`, `WorldTrajectoryFusion` | OpenCV core, Eigen |
-| `trafficmcmt_net` | `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink` | libzmq/cppzmq, protobuf |
+| `trafficmcmt_net` | `ZmqContext`, `MessageFramer`, `SequenceTracker`, `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink`, `ZmqBroker`; WebSocket server/client | libzmq/cppzmq (opt.), protobuf (для ZMQ); WebSocket — платформенные сокеты |
 | `trafficmcmt_map` | `MapConfig`, `MapFeed`, `MapProtocol`, `TrackletTimeline`, `VelocityEstimator`, `TrailBuilder`, `MapIdRegistry` | core, yaml-cpp |
 | `trafficmcmt_emissions` | `EmissionSimulator`, `HbefaEmissionModel`, `PasquillGifford`, `GaussianPuffModel`, `ConcentrationGrid` | core |
 | `trafficmcmt_pipeline` | `MasterPipeline`, `WindowScheduler` | все выше |
@@ -237,8 +240,8 @@ class IMcfSolver;                          // association/IMcfSolver.h
 
 ## 7. Протокол обмена (v1)
 
-Полная схема — `proto/tracklet.proto`, `proto/calibration.proto` (Этап 2).
-Здесь фиксируются инварианты.
+Полная схема — `proto/tracklet.proto`, `proto/calibration.proto` (Этап 2) и
+`proto/global.proto` (Этап 6). Здесь фиксируются инварианты.
 
 ### 7.1. Обязательные поля `TrackletChunk`
 
@@ -265,8 +268,10 @@ class IMcfSolver;                          // association/IMcfSolver.h
 | `tmcmt.v1.global.track` | `GlobalTrackUpdate` |
 | `tmcmt.v1.global.events` | `GlobalIdMergeEvent` |
 
-Параметры сокетов: `SNDHWM=1000`, `RCVHWM=5000`, `LINGER=0`,
-`RECONNECT_IVL=1000`, `HEARTBEAT_IVL/TIMEOUT=1000/3000`.
+Параметры сокетов по умолчанию: `SNDHWM=10000`, `RCVHWM=5000`, `LINGER=0`,
+`RECONNECT_IVL=1000`, `HEARTBEAT_IVL/TIMEOUT=1000/3000`. PUB-отправка
+неблокирующая: при переполнении очереди сообщение отбрасывается и учитывается
+в `send_failures`, трекер не останавливается.
 
 ### 7.3. Гарантии доставки
 
@@ -574,6 +579,44 @@ emissions:
 `enabled: false` или отсутствие секции полностью отключают симулятор —
 `MapFeed` не тратит время на puff'ы и не отправляет `emission_grid`.
 
+### 7.8. Транспорт ZeroMQ (Этап 6)
+
+`trafficmcmt_net` реализует транспорт на C API `zmq.h`; `cppzmq` используется
+только для `find_package`/линковки. Все классы возвращают `Status`/`Result<T>`
+и не бросают исключений.
+
+| Компонент | Роль |
+|---|---|
+| `ZmqContext` | RAII над `zmq_ctx_new/term`; `Shutdown()` будит заблокированный `Next()` |
+| `MessageFramer` | топики `tmcmt.<v>.<camera>.<kind>`, multipart `[topic][payload]`, лимит payload |
+| `SequenceTracker` | `(session, camera)` → gap/duplicate/out-of-order, `missing_total` |
+| `ZmqTrackletPublisher` | Edge PUB, неблокирующая отправка, `LINGER=0` |
+| `ZmqTrackletSource` | Master SUB, bind/connect, reconnect, heartbeat, нормализация, статистика |
+| `ZmqResultSink` | Master PUB для `GlobalTrackUpdate` и `GlobalIdMergeEvent` |
+| `ZmqBroker` | XSUB/XPUB-форвардер, переживает переподключение сторон |
+
+`ZmqTrackletSource::Next()` возвращает `false` только после `Stop()`,
+`ErrorCode::Timeout` при отсутствии сообщений за `timeout_ms` (отрицательное
+значение — ждать бесконечно) и ошибку декодирования в `strict`-режиме.
+Нетреклетные топики (`status`, `calib`, `global.*`) пропускаются и считаются в
+`skipped_topics`.
+
+Дубликаты отсекает `TrackletNormalizer`; размер кэша ограничен
+`max_seen_keys` (по умолчанию 10 000), поэтому RSS Master не растёт линейно с
+числом сообщений. `sequence` трактуется как монотонный счётчик **на камеру**
+(§7.1), поэтому ключ трекера — `(session_id, camera_id)`.
+
+`ZmqResultSink` публикует `tmcmt.v1.global.track` и
+`tmcmt.v1.global.events`; схема — `proto/global.proto`. `GlobalTrackUpdate`
+содержит `repeated TrackletChunk segments`, `global_id`, `type`, `is_final` и
+`updated_ms`, поэтому Master → consumer использует тот же `TrackletChunk`,
+что и Edge → Master.
+
+Инструменты: `trafficmcmt_broker` (XSUB/XPUB), `trafficmcmt_edge_simulator`
+(N виртуальных камер с заданным rate/seed) и `trafficmcmt_tracklet_inspect
+--source zmq` (consumer/статистика). Smoke-сценарий —
+`scripts/smoke_zmq.ps1`.
+
 ## 8. Алгоритмические решения
 
 ### 8.1. Стоимость связи треклетов
@@ -855,12 +898,28 @@ IDSW считается по каждой GT-траектории, упоряд�
 | Восстановление после рестарта брокера | ≤ 5 с |
 | Потери при исправной сети | 0 |
 
+Локальная проверка Этапа 6 (Windows, MSVC 19.51, `build/zmq-check`):
+
+- soak 10 камер × 100 треклетов/с × 60 с: 60 000 сообщений, `missing_total=0`,
+  `rejected=0`, `malformed=0`, `send_failures=0`;
+- дрейф RSS consumer между первой и второй половиной установившегося окна —
+  2.4% (цель ±5%);
+- нагрузочный unit-тест: 10 000 сообщений PUB→SUB, публикация 9 мс,
+  end-to-end 50 мс;
+- рестарт брокера: подписка и публикация восстанавливаются за < 1 с
+  (unit-тест `ZmqBroker.ForwardsAndRecoversAfterRestart`).
+
+p99 «ingest → association» честно измеряется после подключения
+`FlowAssociator` к `MasterPipeline` (Этап 7); на Этапе 6 проверен транспортный
+путь publish → receive.
+
 ## 10. Тестирование и деплой
 
 См. `docs/roadmap.md` (этапы, DoD, тесты) и разделы 5–6 плана:
 
 - Unit: GTest, формулы, гейты, буферы, кодек, ID-менеджер.
-- Integration: in-process ZMQ, полный путь источник → синк.
+- Integration: in-process ZMQ (`trafficmcmt_net_tests`), полный путь
+  источник → синк; `scripts/smoke_zmq.ps1` — broker + N камер + consumer.
 - Golden/regression: IDF1/IDSW на фиксированных наборах.
 - E2E: AI City Challenge (MTMC), Market-1501 (ReID), WildTrack (BEV).
 - Деплой: `docker/master.Dockerfile` (CPU-only), `docker/edge.Dockerfile`,
@@ -883,6 +942,7 @@ IDSW считается по каждой GT-траектории, упоряд�
 | ADR-011 | Зоны входа/выхода — ENU-метры, не пиксели; `default_linked: false` | общий origin уже есть у геопривязки, протокол не несёт размер кадра; явная топология аудируема и не пропускает случайные пары | пиксельные зоны (нужно менять протокол); `default_linked: true` |
 | ADR-012 | Награда за связь `flow.link_reward` (λ=1.0) вычитается солвером, а не хранится в графе | граф остаётся независимым от решателя и хранит интерпретируемый `c_total`; отчётная стоимость не зависит от λ | хранить уже взвешенные рёбра (теряется сырая стоимость) |
 | ADR-013 | muSSP подключается локальным форком через `TRAFFICMCMT_MUSSP_SOURCE_DIR`, без vendoring | не раздувает репозиторий и не требует установленного пакета; CI и обычная сборка остаются на `ssp`/`greedy` | vendoring исходников; обязательная установка muSSP |
+| ADR-014 | ZMQ-транспорт на C API с RAII-обёртками, PUB/SUB + опциональный XSUB/XPUB broker | полный контроль над HWM/linger/таймаутами, `Status` вместо исключений, `Stop()` будит `Next()`; broker даёт стабильные endpoint'ы при рестартах | только cppzmq-обёртки; gRPC streaming |
 
 ## 12. Глоссарий
 
@@ -910,5 +970,5 @@ IDSW считается по каждой GT-траектории, упоряд�
 | 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу; §7.7 — `emission_grid` |
 | 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер, st-ReID и MCF готовы; BEV — Этап 8 |
 | 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 251 unit-тест (протокол, geo, type-aware ReID, reid, st, flow, metrics, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 252 unit-теста (протокол, geo, type-aware ReID, reid, st, flow, metrics, map, emissions, WebSocket) + 17 ZMQ-тестов; smoke на `aire`, Auburn и `smoke_zmq.ps1`; деплой — Этап 9 |
 | 11. ADR | ✅ |
