@@ -42,43 +42,40 @@ int AddEdge(std::vector<std::vector<ResidualEdge>>& adjacency, int from, int to,
     return index;
 }
 
-std::vector<FlowPath> BuildPaths(const TrackletGraph& graph, int source, int sink,
+std::vector<FlowPath> BuildPaths(const TrackletGraph& graph,
                                  const std::vector<std::vector<ResidualEdge>>& adjacency,
                                  const std::vector<OriginalEdge>& originals,
                                  std::size_t nodeCount) {
     const std::vector<TrackletNode>& nodes = graph.Nodes();
-    std::vector<char> usedSource(nodeCount, 0);
-    std::vector<char> usedNode(nodeCount, 0);
-    std::vector<char> usedSink(nodeCount, 0);
     std::vector<int> nextTracklet(nodeCount, -1);
+    std::vector<int> previousTracklet(nodeCount, -1);
     std::vector<double> nextCost(nodeCount, 0.0);
 
     for (const OriginalEdge& edge : originals) {
+        if (!edge.transition || edge.tracklet_from < 0 || edge.tracklet_to < 0) {
+            continue;
+        }
         const ResidualEdge& residual =
             adjacency[static_cast<std::size_t>(edge.from)]
                      [static_cast<std::size_t>(edge.adjacency_index)];
         if (residual.capacity != 0) {
             continue;
         }
-        if (edge.transition) {
-            if (edge.tracklet_from >= 0 && edge.tracklet_to >= 0 &&
-                nextTracklet[static_cast<std::size_t>(edge.tracklet_from)] < 0) {
-                nextTracklet[static_cast<std::size_t>(edge.tracklet_from)] = edge.tracklet_to;
-                nextCost[static_cast<std::size_t>(edge.tracklet_from)] = edge.cost;
-            }
-        } else if (edge.from == source) {
-            usedSource[static_cast<std::size_t>(edge.tracklet_from)] = 1;
-        } else if (edge.to == sink) {
-            usedSink[static_cast<std::size_t>(edge.tracklet_from)] = 1;
-        } else {
-            usedNode[static_cast<std::size_t>(edge.tracklet_from)] = 1;
-        }
+        const auto from = static_cast<std::size_t>(edge.tracklet_from);
+        const auto to = static_cast<std::size_t>(edge.tracklet_to);
+        nextTracklet[from] = edge.tracklet_to;
+        nextCost[from] = edge.cost;
+        previousTracklet[to] = edge.tracklet_from;
     }
 
+    // Start only at nodes without a selected incoming transition. Node indices
+    // follow the insertion order and are not necessarily topological, so a
+    // path must be reconstructed from the selected transitions, not from
+    // `source -> in` alone.
     std::vector<FlowPath> paths;
     std::vector<char> covered(nodeCount, 0);
     for (std::size_t index = 0; index < nodeCount; ++index) {
-        if (usedSource[index] == 0 || usedNode[index] == 0 || covered[index] != 0) {
+        if (previousTracklet[index] >= 0) {
             continue;
         }
         FlowPath path;
@@ -87,9 +84,6 @@ std::vector<FlowPath> BuildPaths(const TrackletGraph& graph, int source, int sin
         while (current < nodeCount && covered[current] == 0) {
             covered[current] = 1;
             path.tracklets.push_back(nodes[current].id);
-            if (usedSink[current] != 0) {
-                break;
-            }
             const int next = nextTracklet[current];
             if (next < 0) {
                 break;
@@ -324,7 +318,7 @@ Result<SolverResult> SspSolver::Solve(const TrackletGraph& graph) {
     }
 
     SolverResult result;
-    result.paths = BuildPaths(graph, source, sink, adjacency, originals, nodeCount);
+    result.paths = BuildPaths(graph, adjacency, originals, nodeCount);
     for (const FlowPath& path : result.paths) {
         result.total_cost += path.cost;
     }

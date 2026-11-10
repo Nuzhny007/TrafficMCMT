@@ -28,7 +28,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 | 2c. Gaussian puff: выбросы и концентрации | ✅ готов |
 | 3. FAISS и ReID | 🟡 индекс/галереи/матчер и оценка готовы; FAISS не проверен |
 | 4. st-ReID | ✅ Camera Link Model, переходы, гейты, scorer; реальный GT отсутствует |
-| 5. muSSP и глобальная ассоциация | ⬜ |
+| 5. muSSP и глобальная ассоциация | ✅ `ssp`/`greedy`/`mussp`, IDF1/IDSW, offline CLI; muSSP — опционально |
 | 6. ZeroMQ транспорт | ⬜ |
 | 7. Синхронизация времени | ⬜ |
 | 8. BEV | ⬜ |
@@ -43,6 +43,9 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
   что и TrafficMCMT, против той же версии OpenCV, с
   `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`, `USE_OCV_EMBEDDINGS=OFF`
 - spdlog, yaml-cpp, GoogleTest (находятся через `find_package`, иначе — `FetchContent`)
+- muSSP — **опционально** (`TRAFFICMCMT_WITH_MUSSP=ON`); путь к локальному checkout
+  задаётся `TRAFFICMCMT_MUSSP_SOURCE_DIR` (должен содержать `muSSP/Graph.cpp`).
+  Без muSSP работают `flow.solver=ssp|greedy`.
 - Eigen 3 для ReID (`find_package`, иначе `FetchContent` 3.4.0)
 - FAISS — опционально, `TRAFFICMCMT_WITH_FAISS=ON`; без него используется `BruteForceIndex`
 
@@ -174,6 +177,30 @@ origin. `default_linked: false` — без явных `links` пары не ра
 `EDGE=OFF, MTT=OFF, PROTOBUF=OFF`. Формулы `c_time`/`c_space`/`c_total` и
 описание гейтов — в `docs/architecture.md` §8.1 и §8.5.
 
+Глобальная ассоциация (Этап 5) — offline CLI `trafficmcmt_associate`:
+
+```powershell
+# треклеты + топология камер -> JSONL с глобальными ID
+.\build\local-release\Release\trafficmcmt_associate.exe `
+  --tracklets build\datasets\auburn_toomer\combined.jsonl `
+  --camera-links configs\camera_links.yaml `
+  --out build\associate\ids.jsonl `
+  --solver ssp --json
+
+# оценка IDF1/IDP/IDR/IDSW по GT
+.\build\local-release\Release\trafficmcmt_associate.exe `
+  --tracklets build\datasets\auburn_toomer\combined.jsonl `
+  --gt build\associate\gt.jsonl `
+  --out build\associate\ids.jsonl --json
+```
+
+`--solver` принимает `ssp` (по умолчанию, эталон), `greedy` (baseline) и
+`mussp` (только при `TRAFFICMCMT_WITH_MUSSP=ON`). Переход выбирается при
+`c_total < flow.link_reward` (по умолчанию 1.0). `--gt` — JSONL
+`{"tracklet": <id>, "identity": "<gt-id>"}`. Модули `trafficmcmt_flow` и
+`trafficmcmt_metrics` — CPU-only (`core`), собираются в CI-сценарии без Edge,
+MTT и protobuf. Детали MCF и метрик — `docs/architecture.md` §8.2, §8.3, §8.6.
+
 ## Структура
 
 ```
@@ -186,8 +213,10 @@ include/trafficmcmt/net/    WebSocket-сервер/клиент (RFC 6455, бе�
 include/trafficmcmt/emissions/  HBEFA, Pasquill-Gifford, Gaussian puff, сетка концентраций
 include/trafficmcmt/reid/   IEmbeddingIndex, BruteForceIndex, FaissIndex, GalleryManager, ReIdMatcher
 include/trafficmcmt/st/     CameraLinkModel, TransitionEstimator, SpatialGate, StReIdScorer, PairCandidateGenerator
+include/trafficmcmt/flow/   TrackletGraph, GraphPruner, McfSolver, FlowAssociator, GlobalIdManager
+include/trafficmcmt/metrics/  MotMetrics (track-level IDF1/IDP/IDR/IDSW)
 proto/                      protobuf-схемы v1 (tracklet, calibration)
-src/                        реализации core/io/edge/mtt/map/net/emissions/reid/st
+src/                        реализации core/io/edge/mtt/map/net/emissions/reid/st/flow/metrics
 apps/master_node/           точка входа Master
 apps/mtt_export/            видео → треклеты (Edge, OpenCV + MTT)
 apps/map_export/            треклеты → JSONL-кадры протокола v1
@@ -196,6 +225,7 @@ apps/tracklet_inspect/      инспектор треклетов
 apps/reid_eval/             CMC/Rank-1/mAP (chunk-split и manifest)
 apps/reid_bench/            латентность, QPS, recall@k индекса
 apps/st_estimate/           размеченные пары → статистика переходов → camera_links.yaml
+apps/associate/             offline-ассоциация: треклеты → глобальные ID + IDF1/IDSW
 tests/unit/                 unit-тесты (GTest)
 configs/                    примеры конфигурации (включая map_feed*.yaml, camera_links.yaml)
 cmake/                      зависимости, warnings, runtime-DLL, package config

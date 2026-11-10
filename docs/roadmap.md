@@ -1,7 +1,7 @@
 # TrafficMCMT — roadmap
 
 > **Статус документа:** живая спецификация. Чекбоксы обновляются по мере выполнения.
-> **Версия:** 0.4 · **Дата:** 2026-11-09
+> **Версия:** 0.5 · **Дата:** 2026-11-10
 > **Оценки:** человеко-дни для одного senior C++ разработчика.
 
 ## Сводка
@@ -521,20 +521,22 @@ ctest --preset local-release
 
 ---
 
-## Этап 5. muSSP и глобальная ассоциация (10–14 дней) ⬜
+## Этап 5. muSSP и глобальная ассоциация (10–14 дней) ✅
 
 **Цель:** непересекающиеся глобальные траектории, оптимальные по суммарной стоимости.
 
 ### Задачи
 
-- [ ] `TrackletGraph` — split-узлы, ёмкости, рёбра с `c_total`
-- [ ] `GraphPruner` — top-K, гейты, связные компоненты
-- [ ] `IMcfSolver`, `SolverResult`
-- [ ] `SspSolver` — собственный SSP (эталон + fallback)
-- [ ] `MuSspSolver` — адаптер (`ToMuSspFormat` / `FromMuSspResult`)
-- [ ] `FlowAssociator` — пути → `GlobalId`
-- [ ] `GlobalIdManager` — union-find, `commit_lag`, merge-события
-- [ ] `GreedyAssociator` — baseline
+- [x] `TrackletGraph` — split-узлы, ёмкости, рёбра с `c_total`
+- [x] `GraphPruner` — top-K, гейты, связные компоненты
+- [x] `IMcfSolver`, `SolverResult`
+- [x] `SspSolver` — собственный SSP (эталон + fallback)
+- [x] `MuSspSolver` — адаптер (`ToMuSspFormat` / `FromMuSspResult`)
+- [x] `FlowAssociator` — пути → `GlobalId`
+- [x] `GlobalIdManager` — union-find, `commit_lag`, merge-события
+- [x] `GreedyAssociator` — baseline
+- [x] `trafficmcmt_metrics` — track-level IDF1/IDP/IDR/IDSW
+- [x] `trafficmcmt_associate` — offline CLI (JSONL → глобальные ID, `--gt`)
 
 ### DoD
 
@@ -551,6 +553,43 @@ ctest --preset local-release
 - Несвязные компоненты, пустой граф.
 - `GlobalIdManager`: merge, повторный merge, запрет переиспользования ID.
 - Golden-регрессия IDF1.
+
+### Прогресс (2026-11-10)
+
+| Проверка | Результат |
+|---|---|
+| Сборка | `local-release`, MSVC 19.51 / VS 2026 — OK |
+| Тесты C++ | `ctest --preset local-release`: **251/251 passed** (1 skipped: muSSP выключен) |
+| CI-сценарий | `EDGE=OFF, MTT=OFF, PROTOBUF=OFF, MUSSP=OFF`: сборка OK, **153/153 passed** |
+| muSSP | локальный форк `C:/work/home/mtracker/tmp/muSSP`, `MUSSP=ON`: unit-тесты **217/217** |
+| Master | `dumpbin /dependents`: нет OpenCV/CUDA/MTTracking/NVINFER |
+| Brute force | `SspSolver` и `MuSspSolver` совпадают с перебором на графах ≤ 5 узлов и на разреженном графе из 10 узлов (в т.ч. при перемешанном порядке узлов) |
+| Auburn smoke | 226 треклетов / 2792 перехода: `ssp` и `mussp` дают одинаковые 126 путей, `total_cost=57.562` и идентичный JSONL глобальных ID |
+
+Осталось до полного закрытия DoD: замер 5000 треклетов / 200k рёбер и
+IDF1-регрессия на синтетическом MCMT (нужен генератор с GT); подключение
+`FlowAssociator` к `MasterPipeline` — Этап 7.
+
+### Команды
+
+```powershell
+# offline-ассоциация
+.\build\local-release\Release\trafficmcmt_associate.exe `
+  --tracklets build\datasets\auburn_toomer\combined.jsonl `
+  --camera-links configs\camera_links.yaml `
+  --out build\associate\ids.jsonl --solver ssp --json
+
+# с оценкой IDF1 (JSONL {"tracklet": <id>, "identity": "<gt>"})
+.\build\local-release\Release\trafficmcmt_associate.exe `
+  --tracklets build\datasets\auburn_toomer\combined.jsonl `
+  --gt build\associate\gt.jsonl `
+  --out build\associate\ids.jsonl --json
+
+# muSSP локально
+cmake --preset local-release -B build/mussp-check `
+  -DTRAFFICMCMT_WITH_MUSSP=ON `
+  -DTRAFFICMCMT_MUSSP_SOURCE_DIR=C:/work/home/mtracker/tmp/muSSP
+```
 
 ---
 
@@ -696,3 +735,4 @@ ctest --preset local-release
 | 2026-11-07 | Этап 2c завершён: `trafficmcmt_emissions` (HBEFA, Pasquill-Gifford, Gaussian puff, сетка), `AccelerationEstimator`, кадр `emission_grid` (base64 f32 LE, 5 полей), панель концентраций в viewer; `ctest` 156/156, `vitest` 28/28; `map_export` Aire/Auburn по 120×90×5 полей |
 | 2026-11-08 | Этап 3 (базовый ReID): `trafficmcmt_reid` (`IEmbeddingIndex`, `BruteForceIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher`), `FaissIndex` под флагом, `reid_eval`, `reid_bench`, `docs/reid-eval.md`; `ctest` 195/195, CI-сценарий 97/97; chunk-split Rank-1 Aire 0.4615 / Auburn 0.7523; brute 200k×512 p99 16.2 мс; FAISS не установлен — бэкенд не проверен |
 | 2026-11-09 | Этап 4 (st-ReID): `trafficmcmt_st` (`CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon`), `st.camera_links`, `configs/camera_links.yaml`, `st_estimate`; `GalleryEntry` получил world-endpoints; `ctest` 233/233, CI-сценарий 135/135; синтетика DoD 5×50 пройдена; smoke `st_estimate` μ=4000 мс, σ=296.52 мс; реальный кросс-камерный GT отсутствует |
+| 2026-11-10 | Этап 5 (глобальная ассоциация): `trafficmcmt_flow` (`TrackletGraph`, `GraphPruner`, `SspSolver`, `MuSspSolver`, `GreedyAssociator`, `FlowAssociator`, `GlobalIdManager`), `trafficmcmt_metrics` (track-level IDF1/IDP/IDR/IDSW), `flow.link_reward`, `trafficmcmt_associate`; `ctest` 251/251 (muSSP skipped), CI-сценарий 153/153, локальный muSSP-форк 217/217; `ssp` и `mussp` дают идентичный результат на Auburn; Master без Edge-зависимостей |

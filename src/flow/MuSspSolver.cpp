@@ -7,6 +7,7 @@
 #include <iostream>
 #include <map>
 #include <memory>
+#include <set>
 #include <sstream>
 #include <unordered_map>
 #include <utility>
@@ -130,32 +131,65 @@ Result<SolverResult> MuSspSolver::Solve(const TrackletGraph& graph) {
         }
     }
 
+    // muSSP returns augmenting paths in the residual graph: `pathSet` is not a
+    // set of final trajectories. The final flow is the symmetric difference of
+    // all augmenting paths (see `print_solution` in muSSP's main.cpp), so each
+    // traversed transition edge is toggled once per occurrence. The residual
+    // path may traverse an edge in reverse, hence the lookup is directionless.
+    std::map<std::pair<int, int>, std::pair<std::size_t, std::size_t>> transitionByNodePair;
+    for (const auto& entry : transitionCosts) {
+        const int post = static_cast<int>(2 * entry.first.first + 2);
+        const int pre = static_cast<int>(2 * entry.first.second + 1);
+        transitionByNodePair.emplace(
+            std::make_pair(std::min(post, pre), std::max(post, pre)), entry.first);
+    }
+
+    std::set<std::pair<std::size_t, std::size_t>> selected;
+    for (const std::vector<int>& muPath : pathSet) {
+        for (std::size_t index = 0; index + 1 < muPath.size(); ++index) {
+            const int tail = muPath[index];
+            const int head = muPath[index + 1];
+            const auto it = transitionByNodePair.find(
+                std::make_pair(std::min(tail, head), std::max(tail, head)));
+            if (it == transitionByNodePair.end()) {
+                continue;
+            }
+            const auto found = selected.find(it->second);
+            if (found == selected.end()) {
+                selected.insert(it->second);
+            } else {
+                selected.erase(found);
+            }
+        }
+    }
+
+    std::vector<int> nextTracklet(nodeCount, -1);
+    std::vector<int> previousTracklet(nodeCount, -1);
+    std::vector<double> nextCost(nodeCount, 0.0);
+    for (const auto& [from, to] : selected) {
+        nextTracklet[from] = static_cast<int>(to);
+        previousTracklet[to] = static_cast<int>(from);
+        nextCost[from] = transitionCosts.at({from, to});
+    }
+
     std::vector<FlowPath> paths;
     std::vector<char> covered(nodeCount, 0);
-    for (const std::vector<int>& muPath : pathSet) {
-        std::vector<std::size_t> sequence;
-        for (const int node : muPath) {
-            if (node >= 2 && node <= static_cast<int>(2 * nodeCount) && node % 2 == 0) {
-                sequence.push_back(static_cast<std::size_t>((node - 2) / 2));
-            }
-        }
-        std::reverse(sequence.begin(), sequence.end());
-        if (sequence.empty()) {
+    for (std::size_t index = 0; index < nodeCount; ++index) {
+        if (previousTracklet[index] >= 0) {
             continue;
         }
-
         FlowPath path;
+        std::size_t current = index;
         double cost = 0.0;
-        for (std::size_t index = 0; index < sequence.size(); ++index) {
-            path.tracklets.push_back(nodes[sequence[index]].id);
-            if (index > 0) {
-                const auto it =
-                    transitionCosts.find(std::make_pair(sequence[index - 1], sequence[index]));
-                if (it != transitionCosts.end()) {
-                    cost += it->second;
-                }
+        while (current < nodeCount && covered[current] == 0) {
+            covered[current] = 1;
+            path.tracklets.push_back(nodes[current].id);
+            const int next = nextTracklet[current];
+            if (next < 0) {
+                break;
             }
-            covered[sequence[index]] = 1;
+            cost += nextCost[current];
+            current = static_cast<std::size_t>(next);
         }
         path.cost = cost;
         paths.push_back(std::move(path));

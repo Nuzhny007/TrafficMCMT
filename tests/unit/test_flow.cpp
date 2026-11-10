@@ -219,6 +219,102 @@ TEST(SspSolverTest, MatchesBruteForceOnSmallGraphs) {
     ExpectValidCover(graph, greedyResult.value());
 }
 
+TEST(SspSolverTest, MatchesBruteForceOnSparseMediumGraph) {
+    constexpr std::size_t kNodes = 10;
+    const std::vector<std::pair<std::size_t, std::size_t>> endpoints{
+        {0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 4}, {2, 3}, {2, 5},
+        {3, 4}, {3, 6}, {4, 5}, {4, 7}, {5, 6}, {5, 8}, {6, 7},
+        {6, 9}, {7, 8}, {8, 9}, {1, 6}, {2, 7}, {3, 8}, {0, 9},
+    };
+    const std::vector<double> edgeCosts{
+        -0.9, 0.4, -0.2, -0.7, 0.3, -0.6, -0.1, -0.8, 0.2, -0.5, -0.3,
+        -0.4, 0.1, -0.7, -0.2, -0.6, -0.9, -0.15, 0.25, -0.35, 0.5,
+    };
+    ASSERT_EQ(endpoints.size(), edgeCosts.size());
+
+    TrackletGraph graph;
+    graph.SetLinkReward(0.0);
+    for (std::size_t index = 0; index < kNodes; ++index) {
+        static_cast<void>(graph.AddNode(
+            Node(static_cast<TrackletId>(index + 1),
+                 static_cast<std::int64_t>(index * 100),
+                 static_cast<std::int64_t>(index * 100 + 50))));
+    }
+    std::vector<std::vector<double>> benefit(kNodes, std::vector<double>(kNodes, 0.0));
+    for (std::size_t index = 0; index < endpoints.size(); ++index) {
+        const auto [from, to] = endpoints[index];
+        static_cast<void>(graph.AddTransition(static_cast<TrackletId>(from + 1),
+                                              static_cast<TrackletId>(to + 1),
+                                              edgeCosts[index]));
+        benefit[from][to] = std::max(0.0, -edgeCosts[index]);
+    }
+
+    const double optimalBenefit = BestCoverBenefit(benefit);
+    SspSolver solver;
+    auto result = solver.Solve(graph);
+    ASSERT_TRUE(result);
+    EXPECT_NEAR(-result.value().total_cost, optimalBenefit, 1e-9);
+    ExpectValidCover(graph, result.value());
+
+#ifdef TMCMT_WITH_MUSSP
+    MuSspSolver muSolver;
+    auto muResult = muSolver.Solve(graph);
+    ASSERT_TRUE(muResult);
+    EXPECT_NEAR(-muResult.value().total_cost, optimalBenefit, 1e-9);
+    ExpectValidCover(graph, muResult.value());
+#endif
+}
+
+TEST(SspSolverTest, MatchesBruteForceWithShuffledNodeOrder) {
+    constexpr std::size_t kNodes = 10;
+    // Node ids are inserted in ascending order, but their timestamps follow
+    // `idForRank`, so the graph node vector is not topologically ordered.
+    const std::vector<TrackletId> idForRank{5, 2, 9, 1, 7, 4, 10, 3, 8, 6};
+    const std::vector<std::pair<std::size_t, std::size_t>> endpoints{
+        {0, 1}, {0, 2}, {0, 3}, {1, 2}, {1, 4}, {2, 3}, {2, 5},
+        {3, 4}, {3, 6}, {4, 5}, {4, 7}, {5, 6}, {5, 8}, {6, 7},
+        {6, 9}, {7, 8}, {8, 9}, {1, 6}, {2, 7}, {3, 8}, {0, 9},
+    };
+    const std::vector<double> edgeCosts{
+        -0.9, 0.4, -0.2, -0.7, 0.3, -0.6, -0.1, -0.8, 0.2, -0.5, -0.3,
+        -0.4, 0.1, -0.7, -0.2, -0.6, -0.9, -0.15, 0.25, -0.35, 0.5,
+    };
+
+    TrackletGraph graph;
+    graph.SetLinkReward(0.0);
+    for (TrackletId id = 1; id <= kNodes; ++id) {
+        std::size_t rank = 0;
+        while (idForRank[rank] != id) {
+            ++rank;
+        }
+        static_cast<void>(graph.AddNode(
+            Node(id, static_cast<std::int64_t>(rank * 100),
+                 static_cast<std::int64_t>(rank * 100 + 50))));
+    }
+    std::vector<std::vector<double>> benefit(kNodes, std::vector<double>(kNodes, 0.0));
+    for (std::size_t index = 0; index < endpoints.size(); ++index) {
+        const auto [from, to] = endpoints[index];
+        static_cast<void>(graph.AddTransition(idForRank[from], idForRank[to],
+                                              edgeCosts[index]));
+        benefit[from][to] = std::max(0.0, -edgeCosts[index]);
+    }
+
+    const double optimalBenefit = BestCoverBenefit(benefit);
+    SspSolver solver;
+    auto result = solver.Solve(graph);
+    ASSERT_TRUE(result);
+    EXPECT_NEAR(-result.value().total_cost, optimalBenefit, 1e-9);
+    ExpectValidCover(graph, result.value());
+
+#ifdef TMCMT_WITH_MUSSP
+    MuSspSolver muSolver;
+    auto muResult = muSolver.Solve(graph);
+    ASSERT_TRUE(muResult);
+    EXPECT_NEAR(-muResult.value().total_cost, optimalBenefit, 1e-9);
+    ExpectValidCover(graph, muResult.value());
+#endif
+}
+
 TEST(SspSolverTest, HandlesEmptyGraphAndFactory) {
     TrackletGraph empty;
     SspSolver solver;

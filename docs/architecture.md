@@ -189,14 +189,14 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `TypeAwareReIdExtractor`, `GeoBinding`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn, calib3d) |
 | `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
 | `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon` | core, reid (Eigen) |
-| `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `FlowAssociator`, `GlobalIdManager` | muSSP (opt.), Eigen |
+| `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `GreedyAssociator`, `FlowAssociator`, `GlobalIdManager` | core, muSSP (opt.) |
 | `trafficmcmt_bev` | `HomographyProjector`, `WorldTrajectoryFusion` | OpenCV core, Eigen |
 | `trafficmcmt_net` | `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink` | libzmq/cppzmq, protobuf |
 | `trafficmcmt_map` | `MapConfig`, `MapFeed`, `MapProtocol`, `TrackletTimeline`, `VelocityEstimator`, `TrailBuilder`, `MapIdRegistry` | core, yaml-cpp |
 | `trafficmcmt_emissions` | `EmissionSimulator`, `HbefaEmissionModel`, `PasquillGifford`, `GaussianPuffModel`, `ConcentrationGrid` | core |
 | `trafficmcmt_pipeline` | `MasterPipeline`, `WindowScheduler` | все выше |
 | `trafficmcmt_mtt` | `MttTrackAdapter` | **MTTracking::mtracking**, OpenCV |
-| `trafficmcmt_metrics` | `MotMetrics`, `Evaluator` | core |
+| `trafficmcmt_metrics` | `MotMetrics` — track-level IDF1/IDP/IDR/IDSW, Hungarian | core |
 
 Приложения Этапа 2: `trafficmcmt_mtt_export` (видео → треклеты; единственный таргет,
 линкующий `MTTracking::mdetection`) и `trafficmcmt_tracklet_inspect` (статистика и
@@ -204,7 +204,8 @@ JSON-дамп треклетов). Этап 2b/2c добавляет `trafficmcm
 JSONL-кадры v1) и `trafficmcmt_map_gateway` (WebSocket-реплей кадров и выбросов).
 Этап 3 добавляет `trafficmcmt_reid_eval` (CMC/Rank-1/mAP) и `trafficmcmt_reid_bench`
 (латентность и recall индекса). Этап 4 добавляет `trafficmcmt_st_estimate`
-(размеченные пары → статистика переходов → `camera_links.yaml`).
+(размеченные пары → статистика переходов → `camera_links.yaml`). Этап 5 добавляет
+`trafficmcmt_associate` (offline: треклеты → глобальные ID, опционально IDF1/IDSW).
 
 ### 6.1. Публичный контракт
 
@@ -595,20 +596,55 @@ c_total = (w_a·c_app + w_t·c_time + w_s·c_space) / (w_a + w_t + w_s)
 
 ### 8.2. Глобальная ассоциация
 
-Граф: узел-треклет расщеплён на `in`/`out` с ёмкостью 1; рёбра `source→in`, `out→sink`,
-`out_a→in_b` с весом `c_total`. Min-cost flow даёт набор непересекающихся путей —
-каждый путь = глобальная траектория.
+`TrackletGraph` хранит узлы (`TrackletNode`) и направленные переходы
+`out(from) → in(to)` с «сырой» стоимостью `c_total`. Граф ациклический: переход
+разрешён только если `from.end ≤ to.begin`; при равных метках — по возрастанию id.
 
-- `MuSspSolver` — адаптер к muSSP (основной).
-- `SspSolver` — собственный successive shortest path (эталон корректности и fallback).
-- `GreedyAssociator` — baseline для сравнения.
-- `GraphPruner` — top-K кандидатов, гейты, разбиение на связные компоненты.
+Солверы строят split-сеть:
+
+```
+source → in_i     cap 1, cost 0
+in_i   → out_i    cap 1, cost 0
+out_i  → sink     cap 1, cost 0
+out_i  → in_j     cap 1, cost c_total(i,j) − λ
+```
+
+где `λ = flow.link_reward` (по умолчанию 1.0). Min-cost flow даёт набор
+непересекающихся путей; переход выбирается только при отрицательной
+эффективной стоимости, то есть при `c_total < λ`. В отчёте `FlowPath::cost` и
+`total_cost` остаются суммой сырых `c_total`, поэтому метрика не зависит от
+награды за связь. `TrackletGraph::SetLinkReward()`/`LinkReward()` переносят
+параметр в прунер и компоненты.
+
+- `GraphPruner` — dedupe `(from, to)` с минимальной стоимостью, top-K исходящих
+  рёбер (`max_candidates_per_node`), разбиение на слабо связные компоненты и
+  пропуск компонент больше `max_component_nodes`.
+- `SspSolver` — собственный successive shortest path (эталон корректности и
+  fallback); на DAG начальные потенциалы считаются топологической сортировкой.
+- `MuSspSolver` — адаптер к muSSP; собирается только при
+  `TRAFFICMCMT_WITH_MUSSP=ON`. Локальный форк подключается через
+  `TRAFFICMCMT_MUSSP_SOURCE_DIR` (путь к checkout с `muSSP/Graph.cpp`),
+  исходники компилируются в object-library и не попадают в install-export.
+- `GreedyAssociator` — baseline: рёбра принимаются по возрастанию стоимости,
+  пока оба конца свободны; оптимальность не гарантируется.
+- `FlowAssociator` — собирает граф, применяет прунер, решает каждую компоненту,
+  дополняет непокрытые узлы singleton-путями и передаёт пути в `GlobalIdManager`.
+  Если компонента была пропущена по размеру, `optimal=false`.
+
+`flow.solver=greedy|ssp` работает без muSSP. Offline CLI `trafficmcmt_associate`
+принимает JSONL/protobuf-треклеты и `camera_links.yaml`, строит переходы через
+`PairCandidateGenerator` и пишет JSONL `{tracklet, global_id, camera, begin_ms,
+end_ms}`; с `--gt` дополнительно считает IDF1/IDP/IDR/IDSW.
 
 ### 8.3. Стабильность ID
 
-`GlobalIdManager`: union-find `TrackletId → GlobalId`; ID старше `commit_lag_ms`
-замораживается; слияние оформляется `GlobalIdMergeEvent{old_id, new_id, reason, ts}`;
-закоммиченный ID не переиспользуется.
+`GlobalIdManager`: union-find `TrackletId → GlobalId`; ID начинаются с 1 и
+монотонно растут, никогда не переиспользуются. `Link(a, b)` объединяет группы:
+если одна сторона уже закоммичена, сохраняется её ID, иначе — меньший.
+Слияние оформляется `GlobalIdMergeEvent{old_id, new_id, reason, ts}`.
+`Commit(now)` замораживает группы, последний треклет которых старше
+`now − commit_lag`; закоммиченный ID не меняется при пере-решении окна.
+В offline-режиме `commit_lag` не влияет на назначение ID.
 
 ### 8.4. ReID-индекс, галереи и метрики
 
@@ -785,6 +821,28 @@ recall ≥ 0.80, FP снижены ≥ 3× относительно appearance-o
 кросс-камерного GT для Auburn/Aire нет, поэтому precision/recall на этих
 наборах не измеряются — проверка синтетическая.
 
+### 8.6. Track-level метрики идентичности
+
+`trafficmcmt_metrics` считает IDF1/IDP/IDR/IDSW на уровне треклетов, без
+покадрового сопоставления. GT-идентичности и предсказанные `GlobalId`
+сопоставляются венгерским алгоритмом по матрице совместных вхождений
+треклетов:
+
+```
+IDTP = сумма выбранных ячеек
+IDFP = predicted_tracks − IDTP
+IDFN = gt_tracks − IDTP
+IDP  = IDTP / (IDTP + IDFP)
+IDR  = IDTP / (IDTP + IDFN)
+IDF1 = 2·IDTP / (2·IDTP + IDFP + IDFN)
+```
+
+IDSW считается по каждой GT-траектории, упорядоченной по `begin` (при равенстве —
+по `tracklet_id`): смена `GlobalId` между соседними сопоставленными треклетами.
+Несопоставленные треклеты пропускаются, а не считаются переключением. Матрица
+стоимости для Hungarian — `max_count − count`, поэтому максимизируется число
+совпавших треклетов; пустые входы дают нули.
+
 ## 9. Нефункциональные требования
 
 | Требование | Цель |
@@ -823,6 +881,8 @@ recall ≥ 0.80, FP снижены ≥ 3× относительно appearance-o
 | ADR-009 | HBEFA-таблица портирована в `trafficmcmt_emissions` с атрибуцией | расчёт сверяем с эталоном SUMO построчно, модуль не тянет GPL-код сборки | своя калибровка; отдельный GPL-модуль (см. `docs/emissions-attribution.md`) |
 | ADR-010 | Галерея хранит авторитетные векторы, индекс — производная структура | точные `Remove`/`Evict`/`Rebuild` на любом бэкенде, включая приближённый FAISS | удалять только из индекса и доверять его `remove_ids` |
 | ADR-011 | Зоны входа/выхода — ENU-метры, не пиксели; `default_linked: false` | общий origin уже есть у геопривязки, протокол не несёт размер кадра; явная топология аудируема и не пропускает случайные пары | пиксельные зоны (нужно менять протокол); `default_linked: true` |
+| ADR-012 | Награда за связь `flow.link_reward` (λ=1.0) вычитается солвером, а не хранится в графе | граф остаётся независимым от решателя и хранит интерпретируемый `c_total`; отчётная стоимость не зависит от λ | хранить уже взвешенные рёбра (теряется сырая стоимость) |
+| ADR-013 | muSSP подключается локальным форком через `TRAFFICMCMT_MUSSP_SOURCE_DIR`, без vendoring | не раздувает репозиторий и не требует установленного пакета; CI и обычная сборка остаются на `ssp`/`greedy` | vendoring исходников; обязательная установка muSSP |
 
 ## 12. Глоссарий
 
@@ -846,9 +906,9 @@ recall ≥ 0.80, FP снижены ≥ 3× относительно appearance-o
 | 3. Топология | ✅ зафиксировано |
 | 4. Потоки данных | ✅ зафиксировано |
 | 5. Режимы | ✅ зафиксировано |
-| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `st`, `map`, `net`, `emissions` реализованы; остальные — план |
+| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `st`, `flow`, `metrics`, `map`, `net`, `emissions` реализованы; `pipeline`/`bev` — план |
 | 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу; §7.7 — `emission_grid` |
-| 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер и st-ReID готовы; MCF — Этап 5 |
+| 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер, st-ReID и MCF готовы; BEV — Этап 8 |
 | 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 233 unit-теста (протокол, geo, type-aware ReID, reid, st, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 251 unit-тест (протокол, geo, type-aware ReID, reid, st, flow, metrics, map, emissions, WebSocket), smoke на `aire` и Auburn; деплой — Этап 9 |
 | 11. ADR | ✅ |
