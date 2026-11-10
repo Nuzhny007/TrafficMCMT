@@ -256,6 +256,7 @@ function(tmcmt_copy_runtime_dependencies target)
         COMMAND ${CMAKE_COMMAND}
             -D "TARGET_FILE=$<TARGET_FILE:${target}>"
             -D "DEST_DIR=$<TARGET_FILE_DIR:${target}>"
+            -D "STAGE_DIR=${CMAKE_CURRENT_BINARY_DIR}/tmcmt_runtime_stage"
             -D "RUNTIME_DIRS=${TRAFFICMCMT_RUNTIME_DIRS}"
             -P "${TMCMT_COPY_RUNTIME_SCRIPT}"
         VERBATIM)
