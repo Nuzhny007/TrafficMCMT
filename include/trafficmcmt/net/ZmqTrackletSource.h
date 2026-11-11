@@ -71,9 +71,12 @@ public:
     [[nodiscard]] Status Start(ZmqSourceOptions options);
 
     /// Unblocks a pending `Next()` in another thread.
-    void Stop() noexcept;
+    void Stop() noexcept override;
 
     [[nodiscard]] Result<bool> Next(Tracklet& out) override;
+    /// Reports the wall-clock time captured right after the message was
+    /// received, before decoding. Used by the clock-synchronisation stage.
+    [[nodiscard]] Result<bool> Next(Tracklet& out, Timestamp& received_at) override;
     [[nodiscard]] Status Reset() override;
     [[nodiscard]] std::string Describe() const override;
 

@@ -39,6 +39,7 @@ include(CompilerWarnings)
 # No OpenCV, no Multitarget-tracker, no CUDA, no protobuf.
 # ---------------------------------------------------------------------------
 add_library(trafficmcmt_core STATIC
+    src/core/Clock.cpp
     src/core/Config.cpp
     src/core/Geo.cpp
     src/core/Log.cpp
@@ -200,6 +201,28 @@ target_link_libraries(trafficmcmt_metrics
 tmcmt_set_warnings(trafficmcmt_metrics)
 
 # ---------------------------------------------------------------------------
+# Pipeline: offline/online orchestration and time synchronization (stage 7).
+# No protobuf, no OpenCV, no sockets: sources and sinks are injected through
+# the io headers, so this target builds in the CI configuration.
+# ---------------------------------------------------------------------------
+add_library(trafficmcmt_pipeline STATIC
+    src/pipeline/ClockSyncEstimator.cpp
+    src/pipeline/MasterPipeline.cpp
+    src/pipeline/MetricsCollector.cpp
+    src/pipeline/ReplayGuard.cpp
+    src/pipeline/WindowScheduler.cpp)
+add_library(TrafficMCMT::pipeline ALIAS trafficmcmt_pipeline)
+
+target_link_libraries(trafficmcmt_pipeline
+    PUBLIC
+        trafficmcmt_core
+        trafficmcmt_reid
+        trafficmcmt_st
+        trafficmcmt_flow
+        trafficmcmt_metrics)
+tmcmt_set_warnings(trafficmcmt_pipeline)
+
+# ---------------------------------------------------------------------------
 # Protocol: generated protobuf messages (stage 2).
 # ---------------------------------------------------------------------------
 set(TMCMT_INSTALL_TARGETS
@@ -208,7 +231,8 @@ set(TMCMT_INSTALL_TARGETS
     trafficmcmt_reid
     trafficmcmt_st
     trafficmcmt_flow
-    trafficmcmt_metrics)
+    trafficmcmt_metrics
+    trafficmcmt_pipeline)
 
 if(TRAFFICMCMT_WITH_PROTOBUF)
     set(TMCMT_PROTO_GEN_DIR "${CMAKE_CURRENT_BINARY_DIR}/gen")
@@ -238,6 +262,7 @@ if(TRAFFICMCMT_WITH_PROTOBUF)
         src/io/TrackletCodec.cpp
         src/io/FileTrackletSource.cpp
         src/io/TrackletSinks.cpp
+        src/io/ResultSinks.cpp
         src/io/TrackletNormalizer.cpp
         src/io/InMemoryTrackletStore.cpp)
     add_library(TrafficMCMT::io ALIAS trafficmcmt_io)
@@ -364,7 +389,16 @@ endif()
 # Applications
 # ---------------------------------------------------------------------------
 add_executable(trafficmcmt_master apps/master_node/main.cpp)
-target_link_libraries(trafficmcmt_master PRIVATE trafficmcmt_core)
+target_link_libraries(trafficmcmt_master PRIVATE trafficmcmt_core trafficmcmt_pipeline)
+if(TARGET trafficmcmt_io)
+    target_link_libraries(trafficmcmt_master PRIVATE trafficmcmt_io trafficmcmt_metrics)
+    target_compile_definitions(trafficmcmt_master PRIVATE TMCMT_MASTER_WITH_IO=1)
+    if(TRAFFICMCMT_WITH_ZMQ AND TARGET trafficmcmt_net)
+        target_link_libraries(trafficmcmt_master PRIVATE trafficmcmt_net)
+        target_compile_definitions(trafficmcmt_master PRIVATE TMCMT_MASTER_WITH_ZMQ=1)
+    endif()
+    tmcmt_copy_runtime_dependencies(trafficmcmt_master)
+endif()
 tmcmt_set_warnings(trafficmcmt_master)
 
 if(TARGET trafficmcmt_io)
@@ -375,6 +409,11 @@ if(TARGET trafficmcmt_io)
     endif()
     tmcmt_set_warnings(trafficmcmt_tracklet_inspect)
     tmcmt_copy_runtime_dependencies(trafficmcmt_tracklet_inspect)
+
+    add_executable(trafficmcmt_tracklet_perturb apps/tracklet_perturb/main.cpp)
+    target_link_libraries(trafficmcmt_tracklet_perturb PRIVATE trafficmcmt_io)
+    tmcmt_set_warnings(trafficmcmt_tracklet_perturb)
+    tmcmt_copy_runtime_dependencies(trafficmcmt_tracklet_perturb)
 endif()
 
 if(TARGET trafficmcmt_mtt AND TARGET trafficmcmt_io)

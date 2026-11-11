@@ -4,6 +4,10 @@
 # reads frames for a few seconds and prints a summary. Verifies the end-to-end
 # path: tracklets -> MapFeed -> WebSocket -> JSON (viewer protocol v1).
 #
+# A WebSocket message is not a single `ReceiveAsync`: an `emission_grid` frame is
+# ~290 KB (120x90 float32 for five pollutants), so messages arrive in 64 KB
+# chunks and must be reassembled until `EndOfMessage` before parsing.
+#
 # Example:
 #   powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
 #   powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1 -InputFile build/datasets/aire/cam-01.jsonl -Config configs/map_feed_aire.yaml
@@ -23,6 +27,32 @@ Push-Location $RepoRoot
 
 $gateway = $null
 $socket = $null
+
+function Receive-Message {
+    param([System.Net.WebSockets.ClientWebSocket]$Socket)
+
+    $buffer = New-Object byte[] 65536
+    $segment = New-Object 'System.ArraySegment[byte]' -ArgumentList @(, $buffer)
+    $stream = New-Object System.IO.MemoryStream
+    try {
+        do {
+            $task = $Socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
+            if (-not $task.Wait(3000)) {
+                return $null
+            }
+            $result = $task.Result
+            if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
+                return $null
+            }
+            $stream.Write($buffer, 0, $result.Count)
+        } while (-not $result.EndOfMessage)
+
+        return [Text.Encoding]::UTF8.GetString($stream.ToArray())
+    } finally {
+        $stream.Dispose()
+    }
+}
+
 try {
     if (-not (Test-Path $Exe)) {
         throw "Gateway not found: $Exe. Build it with: cmake --build --preset local-release"
@@ -59,38 +89,65 @@ try {
 
     $counts = @{}
     $maxSpeed = 0.0
-    $buffer = New-Object byte[] 65536
-    $segment = New-Object 'System.ArraySegment[byte]' -ArgumentList @(, $buffer)
+    $maxMessageBytes = 0
+    $emissionMessages = 0
+    $emissionCells = 0
+    $emissionDims = ''
     $end = (Get-Date).AddSeconds($Seconds)
 
     while ((Get-Date) -lt $end) {
-        $task = $socket.ReceiveAsync($segment, [Threading.CancellationToken]::None)
-        if (-not $task.Wait(3000)) {
+        $text = Receive-Message -Socket $socket
+        if ($null -eq $text) {
             break
         }
-        $result = $task.Result
-        if ($result.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) {
-            break
+
+        $bytes = [Text.Encoding]::UTF8.GetByteCount($text)
+        if ($bytes -gt $maxMessageBytes) {
+            $maxMessageBytes = $bytes
         }
-        $text = [Text.Encoding]::UTF8.GetString($buffer, 0, $result.Count)
+
         $frame = $text | ConvertFrom-Json
         if (-not $counts.ContainsKey($frame.type)) {
             $counts[$frame.type] = 0
         }
         $counts[$frame.type] += 1
+
         if ($frame.type -eq 'tracks_update') {
             foreach ($track in $frame.tracks) {
                 if ($null -ne $track.speed_kmh -and [double]$track.speed_kmh -gt $maxSpeed) {
                     $maxSpeed = [double]$track.speed_kmh
                 }
             }
+        } elseif ($frame.type -eq 'emission_grid') {
+            $emissionMessages += 1
+            $cells = [int]$frame.cols * [int]$frame.rows
+            if ($null -eq $frame.bounds -or $null -eq $frame.bounds.west) {
+                throw "emission_grid bounds must be an object with west/south/east/north"
+            }
+            foreach ($name in 'NOx', 'CO', 'PM2.5', 'PM10', 'CO2') {
+                $field = $frame.fields.$name
+                if ($null -eq $field) {
+                    throw "emission_grid is missing the $name field"
+                }
+                $decoded = [Convert]::FromBase64String($field.data).Length
+                if ($decoded -ne $cells * 4) {
+                    throw ("emission_grid $name payload is $decoded bytes, expected {0}" -f ($cells * 4))
+                }
+            }
+            $emissionCells = $cells
+            $emissionDims = "{0}x{1}" -f [int]$frame.cols, [int]$frame.rows
         }
     }
 
     $total = ($counts.Values | Measure-Object -Sum).Sum
-    Write-Host ("gateway smoke: frames={0} max_speed_kmh={1}" -f $total, [Math]::Round($maxSpeed, 2))
+    Write-Host ("gateway smoke: frames={0} max_message_bytes={1} max_speed_kmh={2}" -f `
+            $total, $maxMessageBytes, [Math]::Round($maxSpeed, 2))
     $counts.GetEnumerator() | Sort-Object Name | ForEach-Object {
         Write-Host ("  {0}: {1}" -f $_.Name, $_.Value)
+    }
+    if ($emissionMessages -gt 0) {
+        Write-Host ("  emission_grid: {0} frames, grid {1}, cells {2}" -f `
+                $emissionMessages, $emissionDims, $emissionCells)
     }
 
     if (-not $counts.ContainsKey('camera_zones')) {
@@ -98,6 +155,9 @@ try {
     }
     if (-not $counts.ContainsKey('tracks_update')) {
         throw "No tracks_update frame received"
+    }
+    if ($Seconds -ge 10 -and -not $counts.ContainsKey('heartbeat')) {
+        throw "No heartbeat frame received; feed.heartbeat_s is not being honoured"
     }
 } finally {
     if ($socket) {

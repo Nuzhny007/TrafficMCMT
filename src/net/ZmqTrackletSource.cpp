@@ -109,6 +109,11 @@ void ZmqTrackletSource::Stop() noexcept {
 }
 
 Result<bool> ZmqTrackletSource::Next(Tracklet& out) {
+    Timestamp ignored{};
+    return Next(out, ignored);
+}
+
+Result<bool> ZmqTrackletSource::Next(Tracklet& out, Timestamp& received_at) {
     if (m_socket == nullptr) {
         return Status::Error(ErrorCode::InvalidArgument, "ZeroMQ source is not started");
     }
@@ -157,6 +162,10 @@ Result<bool> ZmqTrackletSource::Next(Tracklet& out) {
             }
             continue;
         }
+
+        // Stamped before decoding so that the clock-sync estimator measures
+        // the network arrival, not the decode time.
+        const Timestamp arrived = NowMs();
 
         const std::vector<std::string>& parts = frames.value();
         if (parts.size() != 2) {
@@ -240,6 +249,7 @@ Result<bool> ZmqTrackletSource::Next(Tracklet& out) {
 
         ++m_stats.decoded;
         out = std::move(tracklet);
+        received_at = arrived;
         return true;
     }
 }

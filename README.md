@@ -30,7 +30,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 | 4. st-ReID | ✅ Camera Link Model, переходы, гейты, scorer; реальный GT отсутствует |
 | 5. muSSP и глобальная ассоциация | ✅ `ssp`/`greedy`/`mussp`, IDF1/IDSW, offline CLI; muSSP — опционально |
 | 6. ZeroMQ транспорт | ✅ PUB/SUB, broker, result sink, edge simulator; smoke 60k msg без потерь |
-| 7. Синхронизация времени | ⬜ |
+| 7. Синхронизация времени и out-of-order | ✅ clock sync, watermark, окна/commit_lag, online-режим; DoD на Auburn |
 | 8. BEV | ⬜ |
 
 ## Требования
@@ -131,7 +131,9 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
 
 `map_gateway` принимает `--speed` (0 — без pacing), `--loop`, `--exit-on-end`,
 `--duration`, `--frames-out`; `/health` отдаёт JSON со счётчиком активных треков.
-Одиночная камера Aire: `configs/map_feed_aire.yaml`.
+Раз в `feed.heartbeat_s` (5 с) шлётся кадр `heartbeat`, поэтому viewer отличает
+тишину в данных от мёртвого соединения. Одиночная камера Aire:
+`configs/map_feed_aire.yaml`.
 
 Выбросы и концентрации (Этап 2c) считаются тем же `map_gateway`: при включённой
 секции `emissions:` он раз в секунду шлёт кадр `emission_grid` (NOx, CO, PM2.5,
@@ -237,6 +239,36 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_zmq.ps1 `
 `ZmqTrackletSource` считает `missing_total`/`duplicates`/`out_of_order` по
 `sequence` на камеру. Схема и параметры — `docs/architecture.md` §7.8.
 
+Синхронизация времени и онлайн-режим (Этап 7):
+
+```powershell
+# offline-эталон (псевдо-GT: identity = global_id)
+.\build\local-release\Release\trafficmcmt_master.exe `
+  --config configs\master.yaml --mode offline `
+  --out build\online\offline.jsonl --stats-out build\online\offline.stats.json
+
+# online по тому же файлу
+.\build\local-release\Release\trafficmcmt_master.exe `
+  --config configs\master.yaml --mode online `
+  --out build\online\online.jsonl --stats-out build\online\online.stats.json
+
+# DoD: ±2 с джиттера доставки, 5% переупорядочивания, сравнение IDF1
+powershell -ExecutionPolicy Bypass -File scripts/smoke_online.ps1
+```
+
+`trafficmcmt_master` поддерживает `--out` (JSONL обновлений, merges — в
+`<path>.merges.jsonl`), `--stats-out` (JSON-статистика и IDF1), `--dump-raw`
+(raw/corrected времена и оценка смещения), `--gt` (JSONL предыдущего прогона
+как псевдо-GT) и `--max-events`/`--stop-after-idle-ms`. Для файлового реплея
+clock sync принудительно выключается: receive-time файла — не часы Edge. В
+ZMQ-режиме sync работает по парам `(tracklet.end, время приёма Master)`.
+`online.clock = event` делает реплей побайтово детерминированным.
+
+`trafficmcmt_tracklet_perturb` создаёт out-of-order поток: `--jitter-ms`
+сдвигает **порядок доставки** (метки времени не меняются), `--reorder` —
+вероятность обмена соседних сообщений, `--event-jitter-ms` — отдельный
+стресс-режим порчи меток времени. Детали — `docs/architecture.md` §8.7.
+
 ## Структура
 
 ```
@@ -252,13 +284,15 @@ include/trafficmcmt/reid/   IEmbeddingIndex, BruteForceIndex, FaissIndex, Galler
 include/trafficmcmt/st/     CameraLinkModel, TransitionEstimator, SpatialGate, StReIdScorer, PairCandidateGenerator
 include/trafficmcmt/flow/   TrackletGraph, GraphPruner, McfSolver, FlowAssociator, GlobalIdManager
 include/trafficmcmt/metrics/  MotMetrics (track-level IDF1/IDP/IDR/IDSW)
+include/trafficmcmt/pipeline/ MasterPipeline, WindowScheduler, TimestampBuffer, ClockSyncEstimator, ReplayGuard, MetricsCollector
 proto/                      protobuf-схемы v1 (tracklet, calibration, global)
-src/                        реализации core/io/edge/mtt/map/net/emissions/reid/st/flow/metrics
-apps/master_node/           точка входа Master
+src/                        реализации core/io/edge/mtt/map/net/emissions/reid/st/flow/metrics/pipeline
+apps/master_node/           точка входа Master (offline/online, JSONL/ZMQ)
 apps/mtt_export/            видео → треклеты (Edge, OpenCV + MTT)
 apps/map_export/            треклеты → JSONL-кадры протокола v1
 apps/map_gateway/           WebSocket-реплей кадров для viewer
 apps/tracklet_inspect/      инспектор треклетов
+apps/tracklet_perturb/      out-of-order поток для проверки DoD Этапа 7
 apps/reid_eval/             CMC/Rank-1/mAP (chunk-split и manifest)
 apps/reid_bench/            латентность, QPS, recall@k индекса
 apps/st_estimate/           размеченные пары → статистика переходов → camera_links.yaml
@@ -269,7 +303,7 @@ tests/unit/                 unit-тесты (GTest)
 configs/                    примеры конфигурации (включая map_feed*.yaml, camera_links.yaml)
 cmake/                      зависимости, warnings, runtime-DLL, package config
 docs/                       архитектура, roadmap, оценка ReID
-scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway, smoke_zmq, reid_eval_*
+scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway, smoke_zmq, smoke_online, reid_eval_*
 ```
 
 Viewer (`traffic-mcmt-viewer`) — отдельный репозиторий: React + deck.gl + MapLibre,

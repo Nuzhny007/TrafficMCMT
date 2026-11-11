@@ -46,6 +46,12 @@ if(TARGET trafficmcmt_metrics)
         unit/test_metrics.cpp)
 endif()
 
+if(TARGET trafficmcmt_pipeline)
+    list(APPEND TMCMT_TEST_SOURCES
+        unit/test_sync.cpp
+        unit/test_pipeline.cpp)
+endif()
+
 add_executable(trafficmcmt_unit_tests ${TMCMT_TEST_SOURCES})
 
 target_link_libraries(trafficmcmt_unit_tests
@@ -84,6 +90,10 @@ endif()
 
 if(TARGET trafficmcmt_metrics)
     target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_metrics)
+endif()
+
+if(TARGET trafficmcmt_pipeline)
+    target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_pipeline)
 endif()
 
 tmcmt_set_warnings(trafficmcmt_unit_tests)

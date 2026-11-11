@@ -155,6 +155,16 @@ std::optional<SolverKind> ParseSolverKind(std::string_view text) {
     return std::nullopt;
 }
 
+std::optional<OnlineClockKind> ParseOnlineClockKind(std::string_view text) {
+    if (EqualsIgnoreCase(text, "wall")) {
+        return OnlineClockKind::Wall;
+    }
+    if (EqualsIgnoreCase(text, "event")) {
+        return OnlineClockKind::Event;
+    }
+    return std::nullopt;
+}
+
 template <typename EnumT, typename ParserT>
 Status ReadEnum(const YAML::Node& parent, const char* key, EnumT& out, ParserT parser, const std::string& where,
                 const char* allowed) {
@@ -471,6 +481,70 @@ Status ParseMasterSection(const YAML::Node& root, MasterConfig& out) {
     if (!(status = ReadScalar(node, "commit_lag_ms", out.commit_lag_ms, "master")).ok()) {
         return status;
     }
+    if (!(status = ReadScalar(node, "warmup_ms", out.warmup_ms, "master")).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "retention_ms", out.retention_ms, "master")).ok()) {
+        return status;
+    }
+
+    YAML::Node watermark;
+    if (!(status = ReadSection(node, "watermark", watermark, "master")).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(watermark, "silent_timeout_ms", out.watermark.silent_timeout_ms, "master.watermark"))
+             .ok()) {
+        return status;
+    }
+
+    YAML::Node sync;
+    if (!(status = ReadSection(node, "clock_sync", sync, "master")).ok()) {
+        return status;
+    }
+    const std::string syncWhere = "master.clock_sync";
+    if (!(status = ReadScalar(sync, "enabled", out.clock_sync.enabled, syncWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(sync, "window_samples", out.clock_sync.window_samples, syncWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(sync, "min_samples", out.clock_sync.min_samples, syncWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(sync, "max_offset_ms", out.clock_sync.max_offset_ms, syncWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(sync, "max_drift_ppm", out.clock_sync.max_drift_ppm, syncWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(sync, "assumed_transport_ms", out.clock_sync.assumed_transport_ms, syncWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(sync, "outlier_sigma", out.clock_sync.outlier_sigma, syncWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(sync, "resync_threshold_ms", out.clock_sync.resync_threshold_ms, syncWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(sync, "use_camera_status_offset", out.clock_sync.use_camera_status_offset, syncWhere))
+             .ok()) {
+        return status;
+    }
+
+    YAML::Node online;
+    if (!(status = ReadSection(node, "online", online, "master")).ok()) {
+        return status;
+    }
+    const std::string onlineWhere = "master.online";
+    if (!(status = ReadEnum(online, "clock", out.online.clock, ParseOnlineClockKind, onlineWhere, "wall|event")).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(online, "idle_timeout_ms", out.online.idle_timeout_ms, onlineWhere)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(online, "max_events", out.online.max_events, onlineWhere)).ok()) {
+        return status;
+    }
     return Status::Ok();
 }
 
@@ -560,6 +634,16 @@ const char* ToString(TrackletFileFormat format) noexcept {
     return "auto";
 }
 
+const char* ToString(OnlineClockKind kind) noexcept {
+    switch (kind) {
+    case OnlineClockKind::Wall:
+        return "wall";
+    case OnlineClockKind::Event:
+        return "event";
+    }
+    return "wall";
+}
+
 // ---------------------------------------------------------------------------
 // MasterConfig
 // ---------------------------------------------------------------------------
@@ -625,6 +709,45 @@ Status MasterConfig::Validate() const {
     }
     if (commit_lag_ms < 0) {
         return fail("master.commit_lag_ms", "must be >= 0");
+    }
+    if (warmup_ms < 0) {
+        return fail("master.warmup_ms", "must be >= 0");
+    }
+    if (retention_ms <= 0) {
+        return fail("master.retention_ms", "must be > 0");
+    }
+    if (retention_ms < window_ms + commit_lag_ms) {
+        return fail("master.retention_ms", "must be >= master.window_ms + master.commit_lag_ms");
+    }
+    if (watermark.silent_timeout_ms <= 0) {
+        return fail("master.watermark.silent_timeout_ms", "must be > 0");
+    }
+    if (clock_sync.window_samples <= 0) {
+        return fail("master.clock_sync.window_samples", "must be > 0");
+    }
+    if (clock_sync.min_samples <= 0 || clock_sync.min_samples > clock_sync.window_samples) {
+        return fail("master.clock_sync.min_samples", "must be > 0 and <= master.clock_sync.window_samples");
+    }
+    if (clock_sync.max_offset_ms <= 0) {
+        return fail("master.clock_sync.max_offset_ms", "must be > 0");
+    }
+    if (clock_sync.max_drift_ppm < 0.0) {
+        return fail("master.clock_sync.max_drift_ppm", "must be >= 0");
+    }
+    if (clock_sync.assumed_transport_ms < 0) {
+        return fail("master.clock_sync.assumed_transport_ms", "must be >= 0");
+    }
+    if (!(clock_sync.outlier_sigma > 0.0)) {
+        return fail("master.clock_sync.outlier_sigma", "must be > 0");
+    }
+    if (clock_sync.resync_threshold_ms < 0) {
+        return fail("master.clock_sync.resync_threshold_ms", "must be >= 0");
+    }
+    if (online.idle_timeout_ms < 0) {
+        return fail("master.online.idle_timeout_ms", "must be >= 0");
+    }
+    if (online.max_events < 0) {
+        return fail("master.online.max_events", "must be >= 0");
     }
 
     if (ingest.max_lateness_ms < 0) {
@@ -784,6 +907,21 @@ std::string Dump(const MasterConfig& config) {
     root["master"]["window_ms"] = config.window_ms;
     root["master"]["window_overlap_ms"] = config.window_overlap_ms;
     root["master"]["commit_lag_ms"] = config.commit_lag_ms;
+    root["master"]["warmup_ms"] = config.warmup_ms;
+    root["master"]["retention_ms"] = config.retention_ms;
+    root["master"]["watermark"]["silent_timeout_ms"] = config.watermark.silent_timeout_ms;
+    root["master"]["clock_sync"]["enabled"] = config.clock_sync.enabled;
+    root["master"]["clock_sync"]["window_samples"] = config.clock_sync.window_samples;
+    root["master"]["clock_sync"]["min_samples"] = config.clock_sync.min_samples;
+    root["master"]["clock_sync"]["max_offset_ms"] = config.clock_sync.max_offset_ms;
+    root["master"]["clock_sync"]["max_drift_ppm"] = config.clock_sync.max_drift_ppm;
+    root["master"]["clock_sync"]["assumed_transport_ms"] = config.clock_sync.assumed_transport_ms;
+    root["master"]["clock_sync"]["outlier_sigma"] = config.clock_sync.outlier_sigma;
+    root["master"]["clock_sync"]["resync_threshold_ms"] = config.clock_sync.resync_threshold_ms;
+    root["master"]["clock_sync"]["use_camera_status_offset"] = config.clock_sync.use_camera_status_offset;
+    root["master"]["online"]["clock"] = ToString(config.online.clock);
+    root["master"]["online"]["idle_timeout_ms"] = config.online.idle_timeout_ms;
+    root["master"]["online"]["max_events"] = config.online.max_events;
 
     root["ingest"]["source"] = ToString(config.ingest.source);
     root["ingest"]["max_lateness_ms"] = config.ingest.max_lateness_ms;

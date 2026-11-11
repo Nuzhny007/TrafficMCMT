@@ -326,6 +326,12 @@ int main(int argc, char** argv) {
     const double speed = options->speed;
     bool finished = false;
 
+    // `heartbeat_s` is wall-clock based on purpose: the viewer watchdog measures
+    // real silence, so a slow replay (or a paused one) must still prove liveness.
+    const auto heartbeatInterval =
+        std::chrono::milliseconds(static_cast<std::int64_t>(feedConfig.heartbeat_s * 1000.0));
+    auto lastHeartbeatWall = wallStart;
+
     // `replayOffset` is the track timestamp that maps to `replayWallStart`. It
     // moves forward on every loop iteration.
     tmcmt::Timestamp replayOffset = trackBegin;
@@ -382,6 +388,12 @@ int main(int argc, char** argv) {
                 for (const tmcmt::map::MapFrame& frame : feed->Tick(feedNow)) {
                     out.push_back(tmcmt::map::ToJson(frame));
                 }
+            }
+
+            const auto beatNow = WallClock::now();
+            if (beatNow - lastHeartbeatWall >= heartbeatInterval) {
+                lastHeartbeatWall = beatNow;
+                out.push_back(tmcmt::map::ToJson(feed->Heartbeat(feedNow)));
             }
 
             atEnd = timeline.Empty() && feedNow >= trackEnd + ttl;

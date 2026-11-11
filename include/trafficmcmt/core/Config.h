@@ -46,11 +46,20 @@ enum class TrackletFileFormat : std::uint8_t {
     Protobuf = 2,
 };
 
+/// Time source used by the online pipeline for watermark timeouts and idle
+/// detection. `Event` derives "now" from the newest event timestamp, which
+/// makes replays byte-for-byte deterministic.
+enum class OnlineClockKind : std::uint8_t {
+    Wall = 0,
+    Event = 1,
+};
+
 const char* ToString(SourceKind kind) noexcept;
 const char* ToString(IndexKind kind) noexcept;
 const char* ToString(GateMode mode) noexcept;
 const char* ToString(SolverKind kind) noexcept;
 const char* ToString(TrackletFileFormat format) noexcept;
+const char* ToString(OnlineClockKind kind) noexcept;
 
 // ---------------------------------------------------------------------------
 // Sections
@@ -165,6 +174,47 @@ struct MetricsConfig {
 };
 
 // ---------------------------------------------------------------------------
+// Time synchronization (stage 7)
+// ---------------------------------------------------------------------------
+
+/// Per-camera edge-clock estimation from `(tracklet.end, received_at)` pairs.
+struct ClockSyncConfig {
+    bool enabled = true;
+    /// Samples kept per camera for the median / regression.
+    int window_samples = 120;
+    /// Samples required before a camera is considered synchronised.
+    int min_samples = 5;
+    /// Hard bound for the estimated offset; larger estimates are clamped.
+    int max_offset_ms = 10'000;
+    /// Hard bound for the estimated drift.
+    double max_drift_ppm = 1'000.0;
+    /// Expected chunking + network delay subtracted from the raw offset.
+    int assumed_transport_ms = 250;
+    /// MAD multiplier used to reject delay spikes.
+    double outlier_sigma = 3.0;
+    /// Re-estimate only when the residual exceeds this value.
+    int resync_threshold_ms = 500;
+    /// Reserved for `CameraStatus.clock_offset_ms`; not used in stage 7.
+    bool use_camera_status_offset = false;
+};
+
+/// Event-time watermark behaviour.
+struct WatermarkConfig {
+    /// A camera that produced nothing for this long is excluded from the
+    /// watermark minimum, so a silent camera cannot stall the pipeline.
+    int silent_timeout_ms = 5'000;
+};
+
+/// Online loop behaviour.
+struct OnlineConfig {
+    OnlineClockKind clock = OnlineClockKind::Wall;
+    /// Stop after this long without data; 0 disables the check.
+    int idle_timeout_ms = 0;
+    /// Stop after this many ingested tracklets; 0 disables the check.
+    int max_events = 0;
+};
+
+// ---------------------------------------------------------------------------
 // Root configuration
 // ---------------------------------------------------------------------------
 
@@ -173,6 +223,11 @@ struct MasterConfig {
     int window_ms = 30000;
     int window_overlap_ms = 10000;
     int commit_lag_ms = 15000;
+    /// Event time that must pass before the first window may close. Gives the
+    /// gallery and the clock estimator time to warm up.
+    int warmup_ms = 10000;
+    /// Horizon for the tracklet store, the gallery and the raw-timing table.
+    int retention_ms = 120000;
 
     IngestConfig ingest;
     ReIdConfig reid;
@@ -181,6 +236,9 @@ struct MasterConfig {
     StorageConfig storage;
     OutputConfig output;
     MetricsConfig metrics;
+    ClockSyncConfig clock_sync;
+    WatermarkConfig watermark;
+    OnlineConfig online;
     LogConfig log;
 
     /// Loads and validates the configuration. Never throws.

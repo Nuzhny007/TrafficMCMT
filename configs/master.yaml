@@ -8,6 +8,29 @@ master:
   window_ms: 30000
   window_overlap_ms: 10000
   commit_lag_ms: 15000
+  # Event time that must pass before the first window closes.
+  warmup_ms: 10000
+  # Horizon for the tracklet store, the gallery and the raw-timing table.
+  retention_ms: 120000
+  watermark:
+    # A camera silent for this long is excluded from the watermark minimum.
+    silent_timeout_ms: 5000
+  clock_sync:
+    enabled: true
+    window_samples: 120
+    min_samples: 5
+    max_offset_ms: 10000
+    max_drift_ppm: 1000
+    assumed_transport_ms: 250
+    outlier_sigma: 3.0
+    resync_threshold_ms: 500
+    # Reserved for CameraStatus.clock_offset_ms (not used in stage 7).
+    use_camera_status_offset: false
+  online:
+    # wall | event. `event` makes replays byte-for-byte deterministic.
+    clock: wall
+    idle_timeout_ms: 0
+    max_events: 0
 
 ingest:
   # file | zmq

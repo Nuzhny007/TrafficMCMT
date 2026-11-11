@@ -188,7 +188,7 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 |---|---|---|
 | `trafficmcmt_core` | `Tracklet`, `CameraCalibration`, `MasterConfig`, `Result<T>`, `Log` | spdlog, yaml-cpp |
 | `trafficmcmt_proto` | сгенерированные `tracklet.pb.*`, `calibration.pb.*`, `global.pb.*` | protobuf |
-| `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `TrackletNormalizer`, `InMemoryTrackletStore`, `JsonlTrackletSink`, `BinaryTrackletSink` | protobuf |
+| `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `TrackletNormalizer`, `InMemoryTrackletStore`, `JsonlTrackletSink`, `BinaryTrackletSink`, `JsonlResultSink`; заголовки `ITrackletSource`/`IResultSink` доступны без protobuf | protobuf |
 | `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `TypeAwareReIdExtractor`, `GeoBinding`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn, calib3d) |
 | `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
 | `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon` | core, reid (Eigen) |
@@ -197,7 +197,7 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | `trafficmcmt_net` | `ZmqContext`, `MessageFramer`, `SequenceTracker`, `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink`, `ZmqBroker`; WebSocket server/client | libzmq/cppzmq (opt.), protobuf (для ZMQ); WebSocket — платформенные сокеты |
 | `trafficmcmt_map` | `MapConfig`, `MapFeed`, `MapProtocol`, `TrackletTimeline`, `VelocityEstimator`, `TrailBuilder`, `MapIdRegistry` | core, yaml-cpp |
 | `trafficmcmt_emissions` | `EmissionSimulator`, `HbefaEmissionModel`, `PasquillGifford`, `GaussianPuffModel`, `ConcentrationGrid` | core |
-| `trafficmcmt_pipeline` | `MasterPipeline`, `WindowScheduler` | все выше |
+| `trafficmcmt_pipeline` | `MasterPipeline`, `WindowScheduler`, `TimestampBuffer`, `ClockSyncEstimator`, `ReplayGuard`, `MetricsCollector` | core, reid, st, flow, metrics; без protobuf |
 | `trafficmcmt_mtt` | `MttTrackAdapter` | **MTTracking::mtracking**, OpenCV |
 | `trafficmcmt_metrics` | `MotMetrics` — track-level IDF1/IDP/IDR/IDSW, Hungarian | core |
 
@@ -209,6 +209,9 @@ JSONL-кадры v1) и `trafficmcmt_map_gateway` (WebSocket-реплей кад
 (латентность и recall индекса). Этап 4 добавляет `trafficmcmt_st_estimate`
 (размеченные пары → статистика переходов → `camera_links.yaml`). Этап 5 добавляет
 `trafficmcmt_associate` (offline: треклеты → глобальные ID, опционально IDF1/IDSW).
+Этап 7 подключает `trafficmcmt_master` к `MasterPipeline` (offline/online, JSONL и
+ZMQ ingest, `--out`/`--stats-out`/`--dump-raw`/`--gt`) и добавляет
+`trafficmcmt_tracklet_perturb` (out-of-order поток для DoD).
 
 ### 6.1. Публичный контракт
 
@@ -219,18 +222,28 @@ namespace tmcmt {
 
 struct MasterConfig;                       // core/Config.h
 
+struct PipelineDependencies {              // pipeline/MasterPipeline.h
+    std::unique_ptr<ITrackletSource> source;
+    std::vector<std::unique_ptr<IResultSink>> sinks;
+    std::shared_ptr<spdlog::logger> logger;
+    PipelineClock clock;                   // wall/steady injection for tests
+};
+
 class MasterPipeline {                     // pipeline/MasterPipeline.h
 public:
-    static Result<std::unique_ptr<MasterPipeline>> Create(const MasterConfig&, std::shared_ptr<spdlog::logger>);
+    static Result<std::unique_ptr<MasterPipeline>> Create(const MasterConfig&, PipelineDependencies);
     Status Start();
     Status RunOffline();
     Status RunOnline();
-    void   Stop();
-    PipelineStats Stats() const;
+    void   Stop() noexcept;
+    PipelineStats Stats();
+    std::optional<RawTiming> RawTimingFor(TrackletId id) const;
+    std::vector<std::pair<TrackletId, RawTiming>> RawTimings() const;
+    std::vector<std::pair<TrackletId, GlobalId>> Assignments() const;
 };
 
-class ITrackletSource;                     // ingest/ITrackletSource.h
-class IResultSink;                         // output/IResultSink.h
+class ITrackletSource;                     // io/ITrackletSource.h
+class IResultSink;                         // io/IResultSink.h
 class ITrackletStore;                      // storage/ITrackletStore.h
 class IEmbeddingIndex;                     // reid/IEmbeddingIndex.h
 class IMcfSolver;                          // association/IMcfSolver.h
@@ -403,7 +416,10 @@ mtt_export ──> TrackletChunk (JSONL/protobuf)
   viewer считает `hypot(velocity) * 3.6`;
 - `tracks_remove {ids:[...]}` — немедленное удаление истёкших треков; старые
   клиенты игнорируют неизвестный тип, TTL остаётся страховкой;
-- `id_merge` сохраняет прежнюю семантику (перенос trail на новый id).
+- `id_merge` сохраняет прежнюю семантику (перенос trail на новый id);
+- `heartbeat` отправляется раз в `feed.heartbeat_s` (5 с) по стенным часам, а не
+  по времени записи: клиентский watchdog измеряет реальную тишину, поэтому
+  медленный реплей тоже должен подтверждать живость соединения.
 
 `tracks_update.mode=snapshot` отправляется новому клиенту вместе с
 `camera_zones`; дальше идут только дельты. `MapFeed::Tick` сначала удаляет
@@ -452,6 +468,11 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
 `map_gateway` поддерживает `--loop`, `--exit-on-end`, `--duration`, `--speed 0`
 (без pacing) и `--frames-out` для отладки. `/health` возвращает
 `{"status":"ok","protocol":1,"active_tracks":N}`.
+
+При включённых emissions сообщение `emission_grid` весит ~290 КБ, то есть
+заметно больше одного буфера приёма WebSocket. Клиенты обязаны собирать
+сообщение до `EndOfMessage`: `scripts/smoke_map_gateway.ps1` делает это и
+проверяет длину base64-полей против `cols * rows * 4`.
 
 ### 7.7. Gaussian puff: выбросы и концентрации (Этап 2c)
 
@@ -886,6 +907,53 @@ IDSW считается по каждой GT-траектории, упоряд�
 стоимости для Hungarian — `max_count − count`, поэтому максимизируется число
 совпавших треклетов; пустые входы дают нули.
 
+### 8.7. Онлайн-режим, watermark и синхронизация часов (Этап 7)
+
+`MasterPipeline::RunOnline()` обрабатывает поток как event-time систему:
+сообщения буферизуются, окна решаются по watermark, а идентичности фиксируются
+с задержкой `commit_lag`.
+
+| Компонент | Роль |
+|---|---|
+| `ClockSyncEstimator` | по парам `(tracklet.end, received_at)` оценивает offset (median) и drift (регрессия), отбрасывает выбросы по σ; `ClockCorrection` обратима |
+| `TimestampBuffer<T>` | watermark = `min(active camera max event) − max_lateness`; молчащая камера (`silent_timeout_ms`) исключается; порядок выпуска детерминирован |
+| `WindowScheduler` | окна `window_ms` с `overlap_ms`, warmup; `Advance` решает, `AdvanceCommit` фиксирует окна с `end + commit_lag ≤ watermark` |
+| `ReplayGuard` | классифицирует `InOrder` / `LateWithinWindow` / `TooLate` / `Duplicate` по watermark и состоянию окна |
+| `MetricsCollector` | счётчики, латентность ingest, lateness, время решения окон, статистика по камерам |
+
+**Синхронизация часов.** Используются только receive-time пары
+`(tracklet.end, время приёма Master)`. `CameraStatus.clock_offset_ms` не
+применяется (оставлено на будущее). Коррекция применяется к `begin`, `end` и
+`observations[].ts`; сырые значения и сама коррекция сохраняются в `RawTiming`,
+поэтому исходные метки восстановимы. Для файлового реплея sync принудительно
+выключается: время чтения файла не является часами Edge. В ZMQ-режиме
+`ZmqTrackletSource::Next(out, received_at)` возвращает фактическое время приёма.
+
+**Watermark и поздние сообщения.** Буфер не отклоняет late-элементы; admission
+решает `ReplayGuard`. Сообщение, пришедшее после watermark, но до коммита окна,
+переоткрывает **только** solved-but-not-committed окно (`windows_reopened`);
+после `end + commit_lag` оно классифицируется как `TooLate` и не меняет уже
+зафиксированные ID. `GlobalIdManager::Commit(watermark)` замораживает группы с
+`last_end < watermark − commit_lag`, поэтому ID не «дрожат» после коммита.
+
+**Детерминизм.** При `master.online.clock = event` `now_wall` заменяется на
+`m_max_event`, а все внутренние контейнеры обходятся в стабильном порядке
+(`SortTracklets`, сортировка id). Одинаковый вход даёт побайтово одинаковые
+JSONL updates и merges. Режим `wall` использует реальные часы и предназначен
+для эксплуатации.
+
+**Псевдо-GT и DoD.** `master_node --gt <offline.jsonl>` читает JSONL
+предыдущего прогона: identity = `global_id`, метрики считает
+`MotMetrics::Compute`. `scripts/smoke_online.ps1` выполняет offline → online
+(чистый) → `tracklet_perturb` (±2 с джиттера доставки, 5% перестановок) →
+online (возмущённый), сравнивает IDF1 и повторяет возмущённый прогон для
+проверки побайтового детерминизма.
+
+Джиттер в `trafficmcmt_tracklet_perturb` меняет **порядок доставки**, а не
+метки времени: событие остаётся в своей event-time точке, поэтому буфер может
+его переупорядочить. Отдельный `--event-jitter-ms` портит сами метки и служит
+стресс-тестом, а не сценарием DoD.
+
 ## 9. Нефункциональные требования
 
 | Требование | Цель |
@@ -912,6 +980,24 @@ IDSW считается по каждой GT-траектории, упоряд�
 p99 «ingest → association» честно измеряется после подключения
 `FlowAssociator` к `MasterPipeline` (Этап 7); на Этапе 6 проверен транспортный
 путь publish → receive.
+
+Локальная проверка Этапа 7 (Windows, MSVC 19.51):
+
+- Auburn `combined.jsonl` (226 треклетов, 2 камеры, ~10 с), окно 30 с:
+  offline-эталон → online clean IDF1 = 1.0000; после `tracklet_perturb`
+  (`--jitter-ms 2000 --reorder 0.05 --seed 42`) online IDF1 = 1.0000,
+  относительное падение 0%, `too_late=0`, окна закоммичены;
+- повторный возмущённый прогон при `online.clock=event` совпадает побайтово
+  (updates и `<path>.merges.jsonl`);
+- unit-тесты: все 24 перестановки порядка, watermark при молчащей камере,
+  дрейф 100 ppm, детерминизм `WindowScheduler`, 3 камеры с разными смещениями
+  часов, переоткрытие окна поздним сообщением;
+- `ctest`: `local-release` 242/242 (+1 skip), `ci-check` 179/179 (+1 skip,
+  без protobuf — master в stub-режиме), `zmq-check` 294/294 (+1 skip).
+
+Ограничение: онлайн-ассоциация локальна окну, а идентичности между окнами
+переносятся через перекрытие (`window_overlap_ms`). Окно должно покрывать
+типичное время жизни объекта; иначе часть треков между окнами не свяжется.
 
 ## 10. Тестирование и деплой
 
@@ -943,6 +1029,7 @@ p99 «ingest → association» честно измеряется после по
 | ADR-012 | Награда за связь `flow.link_reward` (λ=1.0) вычитается солвером, а не хранится в графе | граф остаётся независимым от решателя и хранит интерпретируемый `c_total`; отчётная стоимость не зависит от λ | хранить уже взвешенные рёбра (теряется сырая стоимость) |
 | ADR-013 | muSSP подключается локальным форком через `TRAFFICMCMT_MUSSP_SOURCE_DIR`, без vendoring | не раздувает репозиторий и не требует установленного пакета; CI и обычная сборка остаются на `ssp`/`greedy` | vendoring исходников; обязательная установка muSSP |
 | ADR-014 | ZMQ-транспорт на C API с RAII-обёртками, PUB/SUB + опциональный XSUB/XPUB broker | полный контроль над HWM/linger/таймаутами, `Status` вместо исключений, `Stop()` будит `Next()`; broker даёт стабильные endpoint'ы при рестартах | только cppzmq-обёртки; gRPC streaming |
+| ADR-015 | Онлайн-режим: event-time буфер + watermark, окна с `commit_lag`, clock sync только по receive-time парам | out-of-order и рассинхронизация часов не меняют уже закоммиченные ID; `clock=event` даёт побайтовый детерминизм, `clock=wall` — эксплуатацию; raw-времена сохраняются рядом с corrected | синхронная обработка по приходу (теряет late-сообщения); полный offline-пересчёт (не масштабируется) |
 
 ## 12. Глоссарий
 
@@ -966,9 +1053,9 @@ p99 «ingest → association» честно измеряется после по
 | 3. Топология | ✅ зафиксировано |
 | 4. Потоки данных | ✅ зафиксировано |
 | 5. Режимы | ✅ зафиксировано |
-| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `st`, `flow`, `metrics`, `map`, `net`, `emissions` реализованы; `pipeline`/`bev` — план |
+| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `st`, `flow`, `metrics`, `map`, `net`, `emissions`, `pipeline` реализованы; `bev` — план |
 | 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу; §7.7 — `emission_grid` |
-| 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер, st-ReID и MCF готовы; BEV — Этап 8 |
-| 9. НФТ | 📋 измеряется с Этапа 6 |
-| 10. Тесты/деплой | 🟡 252 unit-теста (протокол, geo, type-aware ReID, reid, st, flow, metrics, map, emissions, WebSocket) + 17 ZMQ-тестов; smoke на `aire`, Auburn и `smoke_zmq.ps1`; деплой — Этап 9 |
+| 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер, st-ReID, MCF, онлайн-окна и clock sync готовы; BEV — Этап 8 |
+| 9. НФТ | 📋 измеряется с Этапа 6; online-латентность — на Этапе 7 |
+| 10. Тесты/деплой | 🟡 242 unit-теста в `local-release` (+1 skip), 179 в `ci-check` без protobuf, 294 в `zmq-check`; smoke на `aire`, Auburn, `smoke_zmq.ps1` и `smoke_online.ps1`; деплой — Этап 9 |
 | 11. ADR | ✅ |

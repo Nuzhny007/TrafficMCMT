@@ -1,7 +1,7 @@
 # TrafficMCMT — roadmap
 
 > **Статус документа:** живая спецификация. Чекбоксы обновляются по мере выполнения.
-> **Версия:** 0.6 · **Дата:** 2026-11-10
+> **Версия:** 0.7 · **Дата:** 2026-11-11
 > **Оценки:** человеко-дни для одного senior C++ разработчика.
 
 ## Сводка
@@ -17,7 +17,7 @@
 | 4 | st-ReID (Camera Link Model) | 8–12 | ✅ | 2, 3 |
 | 5 | muSSP и глобальная ассоциация | 10–14 | ✅ | 3, 4 |
 | 6 | ZeroMQ транспорт | 6–8 | ✅ | 2 |
-| 7 | Синхронизация времени | 7–10 | ⬜ | 5, 6 |
+| 7 | Синхронизация времени | 7–10 | ✅ | 5, 6 |
 | 8 | BEV и мировые координаты | 8–12 | ⬜ | 4 |
 | 9 | Прод-обвязка (опция) | 5–7 | ⬜ | 6, 7 |
 
@@ -669,33 +669,44 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_zmq.ps1 `
 
 ---
 
-## Этап 7. Синхронизация времени и out-of-order (7–10 дней) ⬜
+## Этап 7. Синхронизация времени и out-of-order (7–10 дней) ✅
 
 **Цель:** корректность при рассинхронизации часов и переупорядочивании.
 
 ### Задачи
 
-- [ ] `TimestampBuffer<T>` — watermark, `max_lateness`
-- [ ] `ClockSyncEstimator` — offset (median) + drift (регрессия)
-- [ ] `WindowScheduler` — окно, перекрытие, warm start
-- [ ] `ReplayGuard` — поздние сообщения → пере-решение окна
-- [ ] `MetricsCollector` — латентность, lateness, пропуски
-- [ ] Онлайн-режим `MasterPipeline::RunOnline()`
+- [x] `TimestampBuffer<T>` — watermark, `max_lateness`
+- [x] `ClockSyncEstimator` — offset (median) + drift (регрессия)
+- [x] `WindowScheduler` — окно, перекрытие, warm start
+- [x] `ReplayGuard` — поздние сообщения → пере-решение окна
+- [x] `MetricsCollector` — латентность, lateness, пропуски
+- [x] Онлайн-режим `MasterPipeline::RunOnline()`
 
 ### DoD
 
-- Джиттер ±2 с и 5% переупорядочивания: IDF1 падает ≤ 2% относительно offline.
-- Watermark не залипает при «молчащей» камере (закрытие по таймауту).
-- Позднее сообщение обрабатывается в пределах одного окна.
-- Побайтово детерминированный реплей.
+- [x] Джиттер ±2 с и 5% переупорядочивания: IDF1 падает ≤ 2% относительно offline.
+- [x] Watermark не залипает при «молчащей» камере (закрытие по таймауту).
+- [x] Позднее сообщение обрабатывается в пределах одного окна.
+- [x] Побайтово детерминированный реплей.
 
 ### Тесты
 
-- Все перестановки порядка для 4 элементов.
-- Продвижение watermark, зависшая камера.
-- Сходимость `ClockSyncEstimator` при дрейфе 100 ppm.
-- Детерминизм `WindowScheduler`.
-- Интеграция: 3 камеры с разными смещениями часов.
+- [x] Все перестановки порядка для 4 элементов.
+- [x] Продвижение watermark, зависшая камера.
+- [x] Сходимость `ClockSyncEstimator` при дрейфе 100 ppm.
+- [x] Детерминизм `WindowScheduler`.
+- [x] Интеграция: 3 камеры с разными смещениями часов.
+
+**Результат (2026-11-11).** `trafficmcmt_pipeline` (`MasterPipeline`,
+`WindowScheduler`, `TimestampBuffer`, `ClockSyncEstimator`, `ReplayGuard`,
+`MetricsCollector`) собирается без protobuf. `master_node` подключён к
+pipeline: `--out`/`--stats-out`/`--dump-raw`/`--gt`, file и ZMQ ingest,
+offline/online. Добавлен `trafficmcmt_tracklet_perturb` (джиттер порядка
+доставки, reorder, отдельный `--event-jitter-ms`) и `scripts/smoke_online.ps1`.
+DoD на Auburn: online clean IDF1 = 1.0000, после ±2 с и 5% reorder — 1.0000
+(падение 0%), `too_late=0`; повторный реплей побайтово совпадает. `ctest`:
+242/242 (+1 skip) в `local-release`, 179/179 (+1 skip) в `ci-check`,
+294/294 (+1 skip) в `zmq-check`.
 
 ---
 
@@ -781,3 +792,4 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_zmq.ps1 `
 | 2026-11-09 | Этап 4 (st-ReID): `trafficmcmt_st` (`CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon`), `st.camera_links`, `configs/camera_links.yaml`, `st_estimate`; `GalleryEntry` получил world-endpoints; `ctest` 233/233, CI-сценарий 135/135; синтетика DoD 5×50 пройдена; smoke `st_estimate` μ=4000 мс, σ=296.52 мс; реальный кросс-камерный GT отсутствует |
 | 2026-11-10 | Этап 5 (глобальная ассоциация): `trafficmcmt_flow` (`TrackletGraph`, `GraphPruner`, `SspSolver`, `MuSspSolver`, `GreedyAssociator`, `FlowAssociator`, `GlobalIdManager`), `trafficmcmt_metrics` (track-level IDF1/IDP/IDR/IDSW), `flow.link_reward`, `trafficmcmt_associate`; `ctest` 251/251 (muSSP skipped), CI-сценарий 153/153, локальный muSSP-форк 217/217; `ssp` и `mussp` дают идентичный результат на Auburn; Master без Edge-зависимостей |
 | 2026-11-10 | Этап 6 (ZeroMQ): `trafficmcmt_net` (`ZmqContext`, `MessageFramer`, `SequenceTracker`, `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink`, `ZmqBroker`), `ErrorCode::Timeout`, `GlobalTrackUpdate`/`GlobalIdMergeEvent` (`proto/global.proto`), `trafficmcmt_broker`, `trafficmcmt_edge_simulator`, `tracklet_inspect --source zmq`, `scripts/smoke_zmq.ps1`; `build/zmq-check` — 25/25 net-тестов, DoD-soak 10×100×60 с: 60 000 сообщений, `missing_total=0`, `send_failures=0`, дрейф RSS 2.4%; CI-сценарий без ZMQ не затронут |
+| 2026-11-11 | Этап 7 (время и out-of-order): `trafficmcmt_pipeline` (`MasterPipeline`, `WindowScheduler`, `TimestampBuffer`, `ClockSyncEstimator`, `ReplayGuard`, `MetricsCollector`), `ITrackletSource::Next(out, received_at)`, конфиг `clock_sync`/`watermark`/`online`, `JsonlResultSink`, `master_node --out/--stats-out/--dump-raw/--gt`, `trafficmcmt_tracklet_perturb`, `scripts/smoke_online.ps1`; `ctest` 242/242 (+1 skip), `ci-check` 179/179 (+1 skip), `zmq-check` 294/294 (+1 skip); DoD Auburn: IDF1 1.0000 → 1.0000 при ±2 с и 5% reorder, побайтовый детерминизм |
