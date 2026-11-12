@@ -106,6 +106,38 @@ output:
   zmq:
     endpoint: tcp://0.0.0.0:5557
 
+calibration:
+  # YAML or protobuf JSON/binary. Empty disables Master-side projection.
+  file: ""
+  # Poll interval for hot reload; 0 disables polling.
+  reload_interval_ms: 1000
+  # Reject calibrations without a homography.
+  require_homography: false
+  # Re-project observations that already carry a valid world point.
+  overwrite_world: false
+  # Reject calibrations whose reported RMS exceeds this value (0 disables).
+  max_reprojection_error_m: 2.0
+  # Shared ENU origin; zero means "derive from the calibration/tracklet".
+  shared_origin_lat: 0.0
+  shared_origin_lon: 0.0
+
+bev:
+  # Master-side projection/fusion. Disabled by default for compatibility.
+  enabled: false
+  # Duplicate observations from different cameras of the same identity.
+  duplicate_distance_m: 1.5
+  duplicate_window_ms: 500
+  # Least-squares velocity window.
+  speed_window_ms: 1000
+  # Centred moving-average window for positions; 0 disables smoothing.
+  smooth_window: 0
+  # Fall back to zone-based gating when a pair has no world endpoints.
+  fallback_to_zone: true
+  world_output:
+    # off | geojson | csv
+    format: off
+    path: "data/world_tracks.geojsonl"
+
 metrics:
   enabled: false
   http_port: 9100

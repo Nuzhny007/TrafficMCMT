@@ -12,6 +12,9 @@
 
 #include <spdlog/spdlog.h>
 
+#include "trafficmcmt/bev/CameraCalibrationStore.h"
+#include "trafficmcmt/bev/WorldTrajectoryFusion.h"
+#include "trafficmcmt/bev/WorldTypes.h"
 #include "trafficmcmt/core/Clock.h"
 #include "trafficmcmt/core/Config.h"
 #include "trafficmcmt/core/GlobalTrack.h"
@@ -54,6 +57,10 @@ struct PipelineDependencies {
     std::vector<std::unique_ptr<IResultSink>> sinks;
     std::shared_ptr<spdlog::logger> logger;
     PipelineClock clock;
+    /// Optional pre-loaded calibration registry (YAML or protobuf). When it is
+    /// absent and `bev.enabled` is set, the pipeline loads
+    /// `calibration.file` as YAML itself.
+    std::shared_ptr<bev::CameraCalibrationStore> calibrations;
 };
 
 /// Raw edge-domain timing kept next to the corrected tracklet.
@@ -98,10 +105,21 @@ public:
     /// `(tracklet id, global id)` pairs sorted by tracklet id.
     [[nodiscard]] std::vector<std::pair<TrackletId, GlobalId>> Assignments() const;
 
+    /// Projection/de-duplication counters accumulated by the world stage.
+    [[nodiscard]] bev::FusionStats WorldStats() const;
+
+    /// Calibration registry in use, or null when BEV is disabled.
+    [[nodiscard]] const bev::CameraCalibrationStore* Calibrations() const noexcept {
+        return m_calibrations.get();
+    }
+
 private:
     MasterPipeline(const MasterConfig& config, PipelineDependencies dependencies);
 
     [[nodiscard]] Status Initialize();
+    [[nodiscard]] Status LoadCalibrations();
+    void MaybeReloadCalibrations();
+    void NormalizeTracklet(Tracklet& tracklet);
 
     [[nodiscard]] Status Ingest(SyncedTracklet synced, ArrivalClass arrival, Timestamp now_wall);
     [[nodiscard]] Status ProcessReady();
@@ -134,6 +152,9 @@ private:
     std::unique_ptr<reid::GalleryManager> m_gallery;
     std::unique_ptr<st::CameraLinkModel> m_linkModel;
     std::unique_ptr<flow::GlobalIdManager> m_ids;
+    std::shared_ptr<bev::CameraCalibrationStore> m_calibrations;
+    std::unique_ptr<bev::WorldTrajectoryFusion> m_worldFusion;
+    Timestamp m_nextCalibrationPoll{};
 
     TimestampBuffer<SyncedTracklet> m_buffer;
     WindowScheduler m_scheduler;

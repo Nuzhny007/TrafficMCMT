@@ -62,6 +62,9 @@ struct PairGenerationOptions {
     double max_speed_mps = 30.0;
     double max_distance_m = 200.0;
     bool allow_missing_world = false;
+    /// In `GateMode::Bev`, fall back to the zone-based checks for pairs that
+    /// have no world endpoints instead of rejecting them as `missing_world`.
+    bool bev_fallback_to_zone = false;
 };
 
 /// Generates appearance candidates, applies the st gates and ranks the

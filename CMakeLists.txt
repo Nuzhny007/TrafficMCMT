@@ -63,6 +63,39 @@ target_link_libraries(trafficmcmt_core
 tmcmt_set_warnings(trafficmcmt_core)
 
 # ---------------------------------------------------------------------------
+# Geo: trajectory math shared by the map feed and the BEV module.
+# Pure C++, no OpenCV, no protobuf, no sockets.
+# ---------------------------------------------------------------------------
+add_library(trafficmcmt_geo STATIC
+    src/geo/AccelerationEstimator.cpp
+    src/geo/TrailBuilder.cpp
+    src/geo/VelocityEstimator.cpp)
+add_library(TrafficMCMT::geo ALIAS trafficmcmt_geo)
+
+target_link_libraries(trafficmcmt_geo
+    PUBLIC
+        trafficmcmt_core)
+tmcmt_set_warnings(trafficmcmt_geo)
+
+# ---------------------------------------------------------------------------
+# BEV: homography projection, calibration registry and world-trajectory
+# fusion (stage 8). Pure C++: no OpenCV, no protobuf, no sockets.
+# ---------------------------------------------------------------------------
+add_library(trafficmcmt_bev STATIC
+    src/bev/CameraCalibrationStore.cpp
+    src/bev/HomographyProjector.cpp
+    src/bev/HomographySolver.cpp
+    src/bev/WorldTrajectoryFusion.cpp
+    src/bev/WorldTrackSink.cpp)
+add_library(TrafficMCMT::bev ALIAS trafficmcmt_bev)
+
+target_link_libraries(trafficmcmt_bev
+    PUBLIC
+        trafficmcmt_core
+        trafficmcmt_geo)
+tmcmt_set_warnings(trafficmcmt_bev)
+
+# ---------------------------------------------------------------------------
 # Emissions: HBEFA rates + Gaussian puff dispersion.
 # Pure C++, no OpenCV, no Multitarget-tracker, no sockets.
 # ---------------------------------------------------------------------------
@@ -115,6 +148,7 @@ endif()
 # fused scorer (stage 4). CPU-only; no OpenCV, protobuf or Multitarget-tracker.
 # ---------------------------------------------------------------------------
 add_library(trafficmcmt_st STATIC
+    src/st/BeVSpatialGate.cpp
     src/st/CameraLinkModel.cpp
     src/st/PairCandidateGenerator.cpp
     src/st/Polygon.cpp
@@ -216,6 +250,7 @@ add_library(TrafficMCMT::pipeline ALIAS trafficmcmt_pipeline)
 target_link_libraries(trafficmcmt_pipeline
     PUBLIC
         trafficmcmt_core
+        trafficmcmt_bev
         trafficmcmt_reid
         trafficmcmt_st
         trafficmcmt_flow
@@ -227,6 +262,8 @@ tmcmt_set_warnings(trafficmcmt_pipeline)
 # ---------------------------------------------------------------------------
 set(TMCMT_INSTALL_TARGETS
     trafficmcmt_core
+    trafficmcmt_geo
+    trafficmcmt_bev
     trafficmcmt_emissions
     trafficmcmt_reid
     trafficmcmt_st
@@ -282,20 +319,18 @@ endif()
 # ---------------------------------------------------------------------------
 if(TRAFFICMCMT_WITH_MAP AND TARGET trafficmcmt_io)
     add_library(trafficmcmt_map STATIC
-        src/map/AccelerationEstimator.cpp
         src/map/MapConfig.cpp
         src/map/MapFeed.cpp
         src/map/MapIdRegistry.cpp
         src/map/MapProtocol.cpp
         src/map/TrackletTimeline.cpp
-        src/map/TrackletFiles.cpp
-        src/map/TrailBuilder.cpp
-        src/map/VelocityEstimator.cpp)
+        src/map/TrackletFiles.cpp)
     add_library(TrafficMCMT::map ALIAS trafficmcmt_map)
 
     target_link_libraries(trafficmcmt_map
         PUBLIC
             trafficmcmt_core
+            trafficmcmt_geo
             trafficmcmt_emissions
             trafficmcmt_io)
     tmcmt_set_warnings(trafficmcmt_map)
@@ -389,7 +424,7 @@ endif()
 # Applications
 # ---------------------------------------------------------------------------
 add_executable(trafficmcmt_master apps/master_node/main.cpp)
-target_link_libraries(trafficmcmt_master PRIVATE trafficmcmt_core trafficmcmt_pipeline)
+target_link_libraries(trafficmcmt_master PRIVATE trafficmcmt_core trafficmcmt_bev trafficmcmt_pipeline)
 if(TARGET trafficmcmt_io)
     target_link_libraries(trafficmcmt_master PRIVATE trafficmcmt_io trafficmcmt_metrics)
     target_compile_definitions(trafficmcmt_master PRIVATE TMCMT_MASTER_WITH_IO=1)
@@ -488,6 +523,7 @@ if(TARGET trafficmcmt_io AND TARGET trafficmcmt_st)
     add_executable(trafficmcmt_associate apps/associate/main.cpp)
     target_link_libraries(trafficmcmt_associate
         PRIVATE
+            trafficmcmt_bev
             trafficmcmt_io
             trafficmcmt_st
             trafficmcmt_flow

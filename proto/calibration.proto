@@ -27,8 +27,35 @@ message CameraCalibration {
 
     float meters_per_pixel_at_ground = 7;
 
-    // Coordinate frame of the world points, e.g. "map".
+    // Coordinate frame of the world points, e.g. "map" or "enu".
     string frame_id = 8;
 
     int64 updated_at_ms = 9;
+
+    // WGS-84 origin of the metric frame produced by `homography`.
+    // Zero means "not provided"; consumers fall back to the tracklet origin
+    // or the shared configuration origin.
+    double origin_lat = 10;
+    double origin_lon = 11;
+
+    // Frame size the calibration was made for. Required when
+    // `homography_normalized == false`, ignored otherwise.
+    uint32 image_width = 12;
+    uint32 image_height = 13;
+
+    // true: homography maps normalised pixels [0, 1] -> metres
+    //       (resolution-independent, recommended).
+    // false: homography maps raw pixels -> metres.
+    // Absent means true, so that calibrations produced before this field
+    // existed keep the normalised-pixel semantics.
+    optional bool homography_normalized = 14;
+
+    // RMS reprojection error of the control points, metres.
+    float reprojection_error_m = 15;
+
+    // "manual" or "estimated".
+    string source = 16;
+
+    // Monotonic per-camera version used by the hot-reload store.
+    uint64 version = 17;
 }

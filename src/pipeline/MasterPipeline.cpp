@@ -116,7 +116,91 @@ Status MasterPipeline::Initialize() {
     flow::GlobalIdManagerOptions idOptions;
     idOptions.commit_lag = Timestamp(m_config.commit_lag_ms);
     m_ids = std::make_unique<flow::GlobalIdManager>(idOptions);
+
+    Status status = LoadCalibrations();
+    if (!status.ok()) {
+        return status;
+    }
+
+    m_worldFusion.reset();
+    if (m_config.bev.enabled) {
+        bev::WorldFusionOptions options;
+        options.enabled = true;
+        options.overwrite_world = m_config.calibration.overwrite_world;
+        options.duplicate_distance_m = m_config.bev.duplicate_distance_m;
+        options.duplicate_window_ms = m_config.bev.duplicate_window_ms;
+        options.speed_window_ms = m_config.bev.speed_window_ms;
+        options.smooth_window = m_config.bev.smooth_window;
+        options.shared_origin = GeoPoint{m_config.calibration.shared_origin_latitude,
+                                         m_config.calibration.shared_origin_longitude};
+        options.has_shared_origin = m_config.calibration.shared_origin_latitude != 0.0 ||
+                                    m_config.calibration.shared_origin_longitude != 0.0;
+        m_worldFusion = std::make_unique<bev::WorldTrajectoryFusion>(options);
+    }
     return Status::Ok();
+}
+
+Status MasterPipeline::LoadCalibrations() {
+    m_calibrations.reset();
+    m_nextCalibrationPoll = Timestamp{};
+
+    if (!m_config.bev.enabled) {
+        return Status::Ok();
+    }
+    if (m_dependencies.calibrations) {
+        m_calibrations = m_dependencies.calibrations;
+    } else {
+        if (m_config.calibration.file.empty()) {
+            return Status::Error(ErrorCode::InvalidArgument,
+                                 "bev.enabled requires calibration.file or an injected calibration store");
+        }
+        bev::CalibrationStoreOptions options;
+        options.require_homography = m_config.calibration.require_homography;
+        options.max_reprojection_error_m = m_config.calibration.max_reprojection_error_m;
+        auto loaded = bev::CameraCalibrationStore::LoadYaml(m_config.calibration.file, options);
+        if (!loaded) {
+            return loaded.status();
+        }
+        m_calibrations = std::make_shared<bev::CameraCalibrationStore>(std::move(loaded).value());
+    }
+
+    if (m_config.calibration.reload_interval_ms > 0) {
+        m_nextCalibrationPoll =
+            NowWall() + Timestamp(m_config.calibration.reload_interval_ms);
+    }
+    return Status::Ok();
+}
+
+void MasterPipeline::MaybeReloadCalibrations() {
+    if (!m_calibrations || m_config.calibration.reload_interval_ms <= 0) {
+        return;
+    }
+    if (m_calibrations->Path().empty()) {
+        // In-memory stores (protobuf) have no file to poll.
+        return;
+    }
+    const Timestamp now = NowWall();
+    if (now < m_nextCalibrationPoll) {
+        return;
+    }
+    m_nextCalibrationPoll = now + Timestamp(m_config.calibration.reload_interval_ms);
+    const Status status = m_calibrations->ReloadIfChanged();
+    if (!status.ok()) {
+        m_logger->warn("calibration reload failed, keeping the previous snapshot: {}", status.ToString());
+    }
+}
+
+void MasterPipeline::NormalizeTracklet(Tracklet& tracklet) {
+    if (!m_worldFusion) {
+        return;
+    }
+    std::shared_ptr<const CameraCalibration> calibration;
+    if (m_calibrations) {
+        calibration = m_calibrations->Get(tracklet.camera);
+    }
+    const GeoPoint fallback{m_config.calibration.shared_origin_latitude,
+                            m_config.calibration.shared_origin_longitude};
+    (void)m_worldFusion->Normalize(tracklet, calibration.get(), fallback);
 }
 
 Status MasterPipeline::Start() {
@@ -185,6 +269,8 @@ Status MasterPipeline::RunOffline() {
         if (!next.value()) {
             break;
         }
+        MaybeReloadCalibrations();
+        NormalizeTracklet(tracklet);
         if (HasUsableEmbedding(tracklet, m_config.reid.embedding_dim)) {
             const Status added = m_gallery->Add(tracklet);
             if (!added.ok()) {
@@ -266,6 +352,7 @@ Status MasterPipeline::RunOnline() {
         if (!next) {
             if (next.status().code() == ErrorCode::Timeout) {
                 const Timestamp now = NowWall();
+                MaybeReloadCalibrations();
                 m_buffer.Advance(now);
                 status = ProcessReady();
                 if (!status.ok()) {
@@ -341,6 +428,9 @@ Status MasterPipeline::RunOnline() {
 }
 
 Status MasterPipeline::Ingest(SyncedTracklet synced, ArrivalClass arrival, Timestamp now_wall) {
+    MaybeReloadCalibrations();
+    NormalizeTracklet(synced.tracklet);
+
     const Timestamp eventTime = synced.tracklet.end;
     const CameraId camera = synced.tracklet.camera;
     const TrackletId id = synced.tracklet.id;
@@ -564,7 +654,11 @@ std::vector<flow::TransitionEdge> MasterPipeline::BuildTransitions(
     options.gate_mode = m_config.st.gate.mode;
     options.max_speed_mps = m_config.st.gate.max_speed_mps;
     options.max_distance_m = m_config.st.gate.max_distance_m;
-    options.allow_missing_world = true;
+    // Missing world coordinates are only tolerated outside BEV mode: in BEV
+    // mode the pair is rejected and reported as `missing_world`, which makes a
+    // broken calibration visible instead of silently disabling the gate.
+    options.allow_missing_world = m_config.st.gate.mode != GateMode::Bev;
+    options.bev_fallback_to_zone = m_config.bev.fallback_to_zone;
 
     st::PairCandidateGenerator generator(*m_gallery, m_linkModel.get(), options);
     std::map<std::pair<TrackletId, TrackletId>, double> best;
@@ -797,6 +891,10 @@ std::vector<std::pair<TrackletId, GlobalId>> MasterPipeline::Assignments() const
         return {};
     }
     return m_ids->Assignments();
+}
+
+bev::FusionStats MasterPipeline::WorldStats() const {
+    return m_worldFusion ? m_worldFusion->Stats() : bev::FusionStats{};
 }
 
 void MasterPipeline::UpdateCameraStats() {

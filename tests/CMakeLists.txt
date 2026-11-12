@@ -36,6 +36,11 @@ if(TARGET trafficmcmt_st)
         unit/test_st_reid.cpp)
 endif()
 
+if(TARGET trafficmcmt_bev)
+    list(APPEND TMCMT_TEST_SOURCES
+        unit/test_bev.cpp)
+endif()
+
 if(TARGET trafficmcmt_flow)
     list(APPEND TMCMT_TEST_SOURCES
         unit/test_flow.cpp)
@@ -82,6 +87,10 @@ endif()
 
 if(TARGET trafficmcmt_st)
     target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_st)
+endif()
+
+if(TARGET trafficmcmt_bev)
+    target_link_libraries(trafficmcmt_unit_tests PRIVATE trafficmcmt_bev)
 endif()
 
 if(TARGET trafficmcmt_flow)

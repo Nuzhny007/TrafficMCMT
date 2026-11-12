@@ -1,5 +1,8 @@
+#include <algorithm>
+#include <cctype>
 #include <fstream>
 #include <iostream>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <sstream>
@@ -8,7 +11,10 @@
 #include <utility>
 #include <vector>
 
+#include "trafficmcmt/bev/CameraCalibrationStore.h"
+#include "trafficmcmt/bev/WorldTrackSink.h"
 #include "trafficmcmt/core/Config.h"
+#include "trafficmcmt/core/Geo.h"
 #include "trafficmcmt/core/Log.h"
 #include "trafficmcmt/core/Version.h"
 #include "trafficmcmt/pipeline/MasterPipeline.h"
@@ -43,6 +49,9 @@ struct Options {
     std::string statsPath;
     std::string rawPath;
     std::string groundTruthPath;
+    std::string calibrationPath;
+    std::string worldPath;
+    std::string worldFormat;
     std::optional<PipelineMode> mode;
     std::optional<int> maxEvents;
     std::optional<int> idleTimeoutMs;
@@ -64,6 +73,9 @@ void PrintUsage(std::string_view program) {
               << "  --stats-out <path>         Write pipeline statistics as JSON\n"
               << "  --dump-raw <path>          Write raw/corrected timings as JSONL\n"
               << "  --gt <path>                Compare against a previous result JSONL (pseudo ground truth)\n"
+              << "  --calibration <path>       Camera calibration (YAML/JSON/protobuf); enables BEV projection\n"
+              << "  --world-out <path>         Write fused world tracks (GeoJSONL by default)\n"
+              << "  --world-format <fmt>       World output format: geojson|csv\n"
               << "  --max-events <n>           Stop online after n ingested tracklets\n"
               << "  --stop-after-idle-ms <n>   Stop online after n ms without data\n"
               << "  --dump-config              Print the effective configuration and exit\n"
@@ -144,6 +156,28 @@ std::optional<Options> ParseArgs(int argc, char** argv, std::string& error) {
                 return std::nullopt;
             }
             options.groundTruthPath = std::move(*value);
+        } else if (arg == "--calibration") {
+            auto value = nextValue("--calibration");
+            if (!value) {
+                return std::nullopt;
+            }
+            options.calibrationPath = std::move(*value);
+        } else if (arg == "--world-out") {
+            auto value = nextValue("--world-out");
+            if (!value) {
+                return std::nullopt;
+            }
+            options.worldPath = std::move(*value);
+        } else if (arg == "--world-format") {
+            auto value = nextValue("--world-format");
+            if (!value) {
+                return std::nullopt;
+            }
+            if (tmcmt::bev::ParseWorldOutputFormat(*value) == tmcmt::bev::WorldOutputFormat::Off) {
+                error = "invalid --world-format '" + *value + "', expected geojson|csv";
+                return std::nullopt;
+            }
+            options.worldFormat = std::move(*value);
         } else if (arg == "--max-events") {
             auto value = nextValue("--max-events");
             if (!value) {
@@ -215,8 +249,104 @@ std::string JsonEscape(std::string_view text) {
     return out;
 }
 
+std::string Lowercase(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(),
+                   [](unsigned char character) { return static_cast<char>(std::tolower(character)); });
+    return text;
+}
+
+std::string FileExtension(const std::string& path) {
+    const std::size_t dot = path.find_last_of('.');
+    const std::size_t slash = path.find_last_of("/\\");
+    if (dot == std::string::npos || (slash != std::string::npos && dot < slash)) {
+        return {};
+    }
+    return Lowercase(path.substr(dot + 1));
+}
+
+tmcmt::Result<std::shared_ptr<tmcmt::bev::CameraCalibrationStore>> LoadCalibrationStore(
+    const std::string& path, const tmcmt::CalibrationConfig& config) {
+    using tmcmt::bev::CalibrationStoreOptions;
+    using tmcmt::bev::CameraCalibrationStore;
+
+    if (path.empty()) {
+        return tmcmt::Status::Error(tmcmt::ErrorCode::InvalidArgument,
+                                    "calibration file is not configured");
+    }
+
+    CalibrationStoreOptions options;
+    options.require_homography = config.require_homography;
+    options.max_reprojection_error_m = config.max_reprojection_error_m;
+
+    const std::string extension = FileExtension(path);
+    if (extension == "yaml" || extension == "yml" || extension.empty()) {
+        auto store = CameraCalibrationStore::LoadYaml(path, options);
+        if (!store) {
+            return store.status();
+        }
+        return std::make_shared<CameraCalibrationStore>(std::move(store).value());
+    }
+
+    std::ifstream file(path, std::ios::binary);
+    if (!file.is_open()) {
+        return tmcmt::Status::Error(tmcmt::ErrorCode::IoError,
+                                    "cannot open calibration file: " + path);
+    }
+
+    std::vector<tmcmt::CameraCalibration> calibrations;
+    if (extension == "pb" || extension == "bin" || extension == "protobuf") {
+        std::string payload((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+        auto decoded = tmcmt::CalibrationCodec::DecodeBinary(payload);
+        if (!decoded) {
+            return decoded.status();
+        }
+        calibrations.push_back(std::move(decoded).value());
+    } else if (extension == "json" || extension == "jsonl") {
+        std::string line;
+        std::size_t lineNumber = 0;
+        while (std::getline(file, line)) {
+            ++lineNumber;
+            if (line.find_first_not_of(" \t\r\n") == std::string::npos) {
+                continue;
+            }
+            auto decoded = tmcmt::CalibrationCodec::DecodeJson(line);
+            if (!decoded) {
+                return tmcmt::Status::Error(
+                    tmcmt::ErrorCode::ParseError,
+                    path + ":" + std::to_string(lineNumber) + ": " + decoded.status().message());
+            }
+            calibrations.push_back(std::move(decoded).value());
+        }
+    } else {
+        return tmcmt::Status::Error(tmcmt::ErrorCode::Unsupported,
+                                    "unsupported calibration extension: " + extension);
+    }
+
+    auto store = CameraCalibrationStore::FromCalibrations(std::move(calibrations), options);
+    if (!store) {
+        return store.status();
+    }
+    return std::make_shared<CameraCalibrationStore>(std::move(store).value());
+}
+
+tmcmt::bev::WorldFusionOptions MakeWorldFusionOptions(const MasterConfig& config) {
+    tmcmt::bev::WorldFusionOptions options;
+    options.enabled = config.bev.enabled;
+    options.overwrite_world = config.calibration.overwrite_world;
+    options.duplicate_distance_m = config.bev.duplicate_distance_m;
+    options.duplicate_window_ms = config.bev.duplicate_window_ms;
+    options.speed_window_ms = config.bev.speed_window_ms;
+    options.smooth_window = config.bev.smooth_window;
+    options.shared_origin = tmcmt::GeoPoint{config.calibration.shared_origin_latitude,
+                                            config.calibration.shared_origin_longitude};
+    options.has_shared_origin = config.calibration.shared_origin_latitude != 0.0 ||
+                                config.calibration.shared_origin_longitude != 0.0;
+    return options;
+}
+
 int WriteStats(const std::string& path, const tmcmt::pipeline::PipelineStats& stats, const MasterConfig& config,
-               const std::optional<tmcmt::metrics::MetricsReport>& report) {
+               const std::optional<tmcmt::metrics::MetricsReport>& report,
+               const tmcmt::bev::FusionStats* world, const tmcmt::bev::FusionStats* worldOutput) {
     std::ostringstream out;
     out << "{\n";
     out << "  \"mode\": \"" << tmcmt::ToString(config.mode) << "\",\n";
@@ -258,6 +388,21 @@ int WriteStats(const std::string& path, const tmcmt::pipeline::PipelineStats& st
             << ", \"predicted_tracks\": " << report->predicted_tracks << ", \"idtp\": " << report->idtp
             << ", \"idfp\": " << report->idfp << ", \"idfn\": " << report->idfn << ", \"idsw\": " << report->idsw
             << ", \"idf1\": " << report->idf1 << ", \"idp\": " << report->idp << ", \"idr\": " << report->idr << "}";
+    }
+    if (world != nullptr) {
+        out << ",\n  \"world\": {\"observations\": " << world->observations
+            << ", \"projected\": " << world->projected
+            << ", \"projection_failures\": " << world->projection_failures
+            << ", \"missing_world\": " << world->missing_world
+            << ", \"samples_in\": " << world->samples_in << ", \"samples_out\": " << world->samples_out
+            << ", \"overlap_pairs\": " << world->overlap_pairs
+            << ", \"duplicates_suppressed\": " << world->duplicates_suppressed << "}";
+    }
+    if (worldOutput != nullptr) {
+        out << ",\n  \"world_output\": {\"samples_in\": " << worldOutput->samples_in
+            << ", \"samples_out\": " << worldOutput->samples_out
+            << ", \"overlap_pairs\": " << worldOutput->overlap_pairs
+            << ", \"duplicates_suppressed\": " << worldOutput->duplicates_suppressed << "}";
     }
     out << "\n}\n";
 
@@ -336,6 +481,10 @@ int RunPipeline(MasterConfig config, const Options& options, const std::shared_p
     if (options.idleTimeoutMs) {
         config.online.idle_timeout_ms = *options.idleTimeoutMs;
     }
+    if (!options.calibrationPath.empty()) {
+        config.calibration.file = options.calibrationPath;
+        config.bev.enabled = true;
+    }
 
     if (config.ingest.source == tmcmt::SourceKind::File && config.clock_sync.enabled) {
         logger->warn("file replay disables clock synchronization: receive time is not an edge clock");
@@ -389,6 +538,44 @@ int RunPipeline(MasterConfig config, const Options& options, const std::shared_p
         dependencies.sinks.push_back(std::move(sink).value());
     }
 
+    if (config.bev.enabled) {
+        auto calibrations = LoadCalibrationStore(config.calibration.file, config.calibration);
+        if (!calibrations) {
+            std::cerr << "error: " << calibrations.status().ToString() << "\n";
+            return kExitConfigError;
+        }
+        dependencies.calibrations = std::move(calibrations).value();
+        logger->info("bev: calibrations={} reload_interval_ms={} overwrite_world={}",
+                     dependencies.calibrations->Size(), config.calibration.reload_interval_ms,
+                     config.calibration.overwrite_world);
+    }
+
+    tmcmt::bev::WorldTrackSink* worldSink = nullptr;
+    {
+        std::string worldPath =
+            options.worldPath.empty() ? config.bev.world_output.path : options.worldPath;
+        std::string worldFormatText =
+            options.worldFormat.empty() ? config.bev.world_output.format : options.worldFormat;
+        if (!options.worldPath.empty() && options.worldFormat.empty() &&
+            tmcmt::bev::ParseWorldOutputFormat(config.bev.world_output.format) ==
+                tmcmt::bev::WorldOutputFormat::Off) {
+            worldFormatText = "geojson";
+        }
+        const tmcmt::bev::WorldOutputFormat worldFormat =
+            tmcmt::bev::ParseWorldOutputFormat(worldFormatText);
+        if (worldFormat != tmcmt::bev::WorldOutputFormat::Off) {
+            auto sink = tmcmt::bev::WorldTrackSink::Open(worldPath, worldFormat,
+                                                         MakeWorldFusionOptions(config));
+            if (!sink) {
+                std::cerr << "error: " << sink.status().ToString() << "\n";
+                return kExitIoError;
+            }
+            worldSink = sink.value().get();
+            dependencies.sinks.push_back(std::move(sink).value());
+            logger->info("world output: {} -> {}", tmcmt::bev::ToString(worldFormat), worldPath);
+        }
+    }
+
     auto created = tmcmt::pipeline::MasterPipeline::Create(config, std::move(dependencies));
     if (!created) {
         std::cerr << "error: " << created.status().ToString() << "\n";
@@ -426,7 +613,14 @@ int RunPipeline(MasterConfig config, const Options& options, const std::shared_p
     }
 
     const tmcmt::pipeline::PipelineStats stats = pipeline->Stats();
-    const int statsCode = WriteStats(options.statsPath, stats, config, report);
+    const tmcmt::bev::FusionStats worldStats = pipeline->WorldStats();
+    std::optional<tmcmt::bev::FusionStats> worldOutputStats;
+    if (worldSink != nullptr) {
+        worldOutputStats = worldSink->Stats();
+    }
+    const int statsCode = WriteStats(options.statsPath, stats, config, report,
+                                     config.bev.enabled ? &worldStats : nullptr,
+                                     worldOutputStats ? &*worldOutputStats : nullptr);
     if (statsCode != kExitOk) {
         return statsCode;
     }

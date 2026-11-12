@@ -6,6 +6,7 @@
 #include <utility>
 
 #include "trafficmcmt/reid/ReIdMatcher.h"
+#include "trafficmcmt/st/BeVSpatialGate.h"
 
 namespace tmcmt::st {
 namespace {
@@ -108,7 +109,18 @@ Result<std::vector<PairCandidate>> PairCandidateGenerator::GenerateOne(
     gateOptions.max_distance_m = m_options.max_distance_m;
     gateOptions.allow_missing_world = m_options.allow_missing_world;
     gateOptions.reject_same_camera = m_options.exclude_same_camera;
-    const SpatialGate gate(m_model, gateOptions);
+
+    std::optional<SpatialGate> plainGate;
+    std::optional<BeVSpatialGate> bevGate;
+    if (m_options.gate_mode == GateMode::Bev) {
+        bevGate.emplace(m_model, gateOptions, m_options.bev_fallback_to_zone);
+    } else {
+        plainGate.emplace(m_model, gateOptions);
+    }
+    const auto check = [&plainGate, &bevGate](const TrackletEndpoint& from,
+                                              const TrackletEndpoint& to) {
+        return bevGate ? bevGate->Check(from, to) : plainGate->Check(from, to);
+    };
 
     ScorerOptions scorerOptions;
     scorerOptions.weights = m_options.weights;
@@ -130,7 +142,7 @@ Result<std::vector<PairCandidate>> PairCandidateGenerator::GenerateOne(
         }
         const TrackletEndpoint candidateEndpoint = MakeEndpoint(*entry);
 
-        const GateDecision decision = gate.Check(queryEndpoint, candidateEndpoint);
+        const GateDecision decision = check(queryEndpoint, candidateEndpoint);
         if (!decision.allowed) {
             CountGate(stats, decision.reason);
             continue;

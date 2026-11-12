@@ -108,6 +108,26 @@ metrics:
   enabled: true
   http_port: 9200
 
+calibration:
+  file: configs/calibration.yaml
+  reload_interval_ms: 500
+  require_homography: true
+  overwrite_world: true
+  max_reprojection_error_m: 1.5
+  shared_origin_lat: 32.606456
+  shared_origin_lon: -85.481891
+
+bev:
+  enabled: true
+  duplicate_distance_m: 2.5
+  duplicate_window_ms: 750
+  speed_window_ms: 2000
+  smooth_window: 5
+  fallback_to_zone: false
+  world_output:
+    format: geojson
+    path: out/world.geojsonl
+
 log:
   level: debug
   file: logs/test.log
@@ -171,6 +191,23 @@ TEST(Config, LoadsFullConfiguration) {
     EXPECT_TRUE(config.metrics.enabled);
     EXPECT_EQ(config.metrics.http_port, 9200);
 
+    EXPECT_EQ(config.calibration.file, "configs/calibration.yaml");
+    EXPECT_EQ(config.calibration.reload_interval_ms, 500);
+    EXPECT_TRUE(config.calibration.require_homography);
+    EXPECT_TRUE(config.calibration.overwrite_world);
+    EXPECT_DOUBLE_EQ(config.calibration.max_reprojection_error_m, 1.5);
+    EXPECT_DOUBLE_EQ(config.calibration.shared_origin_latitude, 32.606456);
+    EXPECT_DOUBLE_EQ(config.calibration.shared_origin_longitude, -85.481891);
+
+    EXPECT_TRUE(config.bev.enabled);
+    EXPECT_DOUBLE_EQ(config.bev.duplicate_distance_m, 2.5);
+    EXPECT_EQ(config.bev.duplicate_window_ms, 750);
+    EXPECT_EQ(config.bev.speed_window_ms, 2000);
+    EXPECT_EQ(config.bev.smooth_window, 5);
+    EXPECT_FALSE(config.bev.fallback_to_zone);
+    EXPECT_EQ(config.bev.world_output.format, "geojson");
+    EXPECT_EQ(config.bev.world_output.path, "out/world.geojsonl");
+
     EXPECT_EQ(config.log.level, "debug");
     EXPECT_EQ(config.log.file, "logs/test.log");
     EXPECT_FALSE(config.log.console);
@@ -199,6 +236,21 @@ TEST(Config, AppliesDefaultsWhenSectionsAreMissing) {
     EXPECT_EQ(config.storage.backend, "memory");
     ASSERT_EQ(config.output.sinks.size(), 1u);
     EXPECT_EQ(config.output.sinks[0], "jsonl");
+    EXPECT_TRUE(config.calibration.file.empty());
+    EXPECT_EQ(config.calibration.reload_interval_ms, 1000);
+    EXPECT_FALSE(config.calibration.require_homography);
+    EXPECT_FALSE(config.calibration.overwrite_world);
+    EXPECT_DOUBLE_EQ(config.calibration.max_reprojection_error_m, 2.0);
+    EXPECT_DOUBLE_EQ(config.calibration.shared_origin_latitude, 0.0);
+    EXPECT_DOUBLE_EQ(config.calibration.shared_origin_longitude, 0.0);
+    EXPECT_FALSE(config.bev.enabled);
+    EXPECT_DOUBLE_EQ(config.bev.duplicate_distance_m, 1.5);
+    EXPECT_EQ(config.bev.duplicate_window_ms, 500);
+    EXPECT_EQ(config.bev.speed_window_ms, 1000);
+    EXPECT_EQ(config.bev.smooth_window, 0);
+    EXPECT_TRUE(config.bev.fallback_to_zone);
+    EXPECT_EQ(config.bev.world_output.format, "off");
+    EXPECT_TRUE(config.bev.world_output.path.empty());
     EXPECT_EQ(config.log.level, "info");
 }
 
@@ -254,6 +306,49 @@ TEST(Config, RejectsEmptyFileList) {
     EXPECT_NE(result.status().message().find("output.sinks"), std::string::npos);
 }
 
+TEST(Config, RejectsBevEnabledWithoutCalibrationFile) {
+    const TempFile file("bev:\n  enabled: true\n");
+    auto result = MasterConfig::Load(file.Path());
+    ASSERT_FALSE(result);
+    EXPECT_EQ(result.status().code(), tmcmt::ErrorCode::InvalidArgument);
+    EXPECT_NE(result.status().message().find("calibration.file"), std::string::npos);
+}
+
+TEST(Config, RejectsOverwriteWorldWithoutBev) {
+    const TempFile file("calibration:\n  overwrite_world: true\n");
+    auto result = MasterConfig::Load(file.Path());
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.status().message().find("calibration.overwrite_world"), std::string::npos);
+}
+
+TEST(Config, RejectsIncompleteSharedOrigin) {
+    const TempFile file("calibration:\n  shared_origin_lat: 32.606456\n");
+    auto result = MasterConfig::Load(file.Path());
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.status().message().find("calibration.shared_origin"), std::string::npos);
+}
+
+TEST(Config, RejectsWorldOutputWithoutPath) {
+    const TempFile file("bev:\n  world_output:\n    format: csv\n");
+    auto result = MasterConfig::Load(file.Path());
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.status().message().find("bev.world_output.path"), std::string::npos);
+}
+
+TEST(Config, RejectsUnknownWorldOutputFormat) {
+    const TempFile file("bev:\n  world_output:\n    format: shapefile\n    path: out/world\n");
+    auto result = MasterConfig::Load(file.Path());
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.status().message().find("bev.world_output.format"), std::string::npos);
+}
+
+TEST(Config, RejectsNonPositiveBevDistances) {
+    const TempFile file("bev:\n  duplicate_distance_m: 0\n");
+    auto result = MasterConfig::Load(file.Path());
+    ASSERT_FALSE(result);
+    EXPECT_NE(result.status().message().find("bev.duplicate_distance_m"), std::string::npos);
+}
+
 TEST(Config, ReportsMissingFile) {
     auto result = MasterConfig::Load("definitely_missing_trafficmcmt_config.yaml");
     ASSERT_FALSE(result);
@@ -302,6 +397,21 @@ TEST(Config, DumpRoundTrips) {
     EXPECT_EQ(a.storage.backend, b.storage.backend);
     EXPECT_EQ(a.output.sinks, b.output.sinks);
     EXPECT_EQ(a.metrics.http_port, b.metrics.http_port);
+    EXPECT_EQ(a.calibration.file, b.calibration.file);
+    EXPECT_EQ(a.calibration.reload_interval_ms, b.calibration.reload_interval_ms);
+    EXPECT_EQ(a.calibration.require_homography, b.calibration.require_homography);
+    EXPECT_EQ(a.calibration.overwrite_world, b.calibration.overwrite_world);
+    EXPECT_DOUBLE_EQ(a.calibration.max_reprojection_error_m, b.calibration.max_reprojection_error_m);
+    EXPECT_DOUBLE_EQ(a.calibration.shared_origin_latitude, b.calibration.shared_origin_latitude);
+    EXPECT_DOUBLE_EQ(a.calibration.shared_origin_longitude, b.calibration.shared_origin_longitude);
+    EXPECT_EQ(a.bev.enabled, b.bev.enabled);
+    EXPECT_DOUBLE_EQ(a.bev.duplicate_distance_m, b.bev.duplicate_distance_m);
+    EXPECT_EQ(a.bev.duplicate_window_ms, b.bev.duplicate_window_ms);
+    EXPECT_EQ(a.bev.speed_window_ms, b.bev.speed_window_ms);
+    EXPECT_EQ(a.bev.smooth_window, b.bev.smooth_window);
+    EXPECT_EQ(a.bev.fallback_to_zone, b.bev.fallback_to_zone);
+    EXPECT_EQ(a.bev.world_output.format, b.bev.world_output.format);
+    EXPECT_EQ(a.bev.world_output.path, b.bev.world_output.path);
     EXPECT_EQ(a.log.level, b.log.level);
 }
 

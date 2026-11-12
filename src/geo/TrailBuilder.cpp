@@ -1,9 +1,9 @@
-#include "trafficmcmt/map/TrailBuilder.h"
+#include "trafficmcmt/geo/TrailBuilder.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace tmcmt::map {
+namespace tmcmt::geo {
 
 TrailBuilder::TrailBuilder(std::size_t max_points, double min_distance_m)
     : m_maxPoints(std::max<std::size_t>(1, max_points)),
@@ -31,4 +31,4 @@ void TrailBuilder::Clear() {
     m_points.clear();
 }
 
-} // namespace tmcmt::map
+} // namespace tmcmt::geo

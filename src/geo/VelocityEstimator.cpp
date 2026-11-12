@@ -1,9 +1,9 @@
-#include "trafficmcmt/map/VelocityEstimator.h"
+#include "trafficmcmt/geo/VelocityEstimator.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace tmcmt::map {
+namespace tmcmt::geo {
 namespace {
 
 constexpr std::int64_t kStaleMs = 1000;
@@ -98,4 +98,4 @@ void VelocityEstimator::Clear() {
     m_samples.clear();
 }
 
-} // namespace tmcmt::map
+} // namespace tmcmt::geo

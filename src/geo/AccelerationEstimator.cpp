@@ -1,9 +1,9 @@
-#include "trafficmcmt/map/AccelerationEstimator.h"
+#include "trafficmcmt/geo/AccelerationEstimator.h"
 
 #include <algorithm>
 #include <cmath>
 
-namespace tmcmt::map {
+namespace tmcmt::geo {
 namespace {
 
 constexpr std::int64_t kStaleMs = 1000;
@@ -79,4 +79,4 @@ void AccelerationEstimator::Clear() {
     m_last_ts = Timestamp{};
 }
 
-} // namespace tmcmt::map
+} // namespace tmcmt::geo

@@ -10,6 +10,8 @@
 #include <utility>
 #include <vector>
 
+#include "trafficmcmt/bev/CameraCalibrationStore.h"
+#include "trafficmcmt/core/Camera.h"
 #include "trafficmcmt/core/Config.h"
 #include "trafficmcmt/core/Tracklet.h"
 #include "trafficmcmt/io/IResultSink.h"
@@ -417,6 +419,69 @@ TEST(MasterPipelineTest, RawTimingIsRecoverable) {
         const Timestamp corrected = timing->correction.Apply(timing->raw_end);
         EXPECT_NEAR(static_cast<double>((timing->correction.Revert(corrected) - timing->raw_end).count()), 0.0, 2.0);
     }
+}
+
+TEST(MasterPipelineTest, ProjectsWorldCoordinatesWhenBevIsEnabled) {
+    MasterConfig config = BaseConfig();
+    config.bev.enabled = true;
+
+    std::vector<tmcmt::CameraCalibration> calibrations;
+    for (const char* camera : {"cam-01", "cam-02", "cam-03"}) {
+        tmcmt::CameraCalibration calibration;
+        calibration.camera_id = camera;
+        calibration.has_homography = true;
+        calibration.homography = tmcmt::Homography{100.0, 0.0, 0.0, 0.0, -100.0, 100.0, 0.0, 0.0, 1.0};
+        calibration.image_width = 1920;
+        calibration.image_height = 1080;
+        calibration.homography_normalized = true;
+        calibrations.push_back(std::move(calibration));
+    }
+    auto store = tmcmt::bev::CameraCalibrationStore::FromCalibrations(std::move(calibrations));
+    ASSERT_TRUE(store) << store.status().ToString();
+
+    std::vector<Item> items = ThreeCameraData();
+    for (Item& item : items) {
+        for (Observation& observation : item.first.observations) {
+            observation.world = WorldPoint{};
+        }
+    }
+
+    auto ownedSource = std::make_unique<FakeSource>(std::move(items));
+    auto ownedSink = std::make_unique<CapturingSink>();
+    FakeSource* source = ownedSource.get();
+    CapturingSink* sink = ownedSink.get();
+
+    PipelineDependencies dependencies;
+    dependencies.source = std::move(ownedSource);
+    dependencies.sinks.push_back(std::move(ownedSink));
+    dependencies.calibrations =
+        std::make_shared<tmcmt::bev::CameraCalibrationStore>(std::move(store).value());
+
+    auto created = MasterPipeline::Create(config, std::move(dependencies));
+    ASSERT_TRUE(created) << created.status().ToString();
+    std::unique_ptr<MasterPipeline> pipeline = std::move(created).value();
+
+    const Status status = pipeline->RunOffline();
+    ASSERT_TRUE(status.ok()) << status.ToString();
+
+    ASSERT_NE(pipeline->Calibrations(), nullptr);
+    EXPECT_EQ(pipeline->Calibrations()->Size(), 3u);
+
+    const tmcmt::bev::FusionStats world = pipeline->WorldStats();
+    EXPECT_GT(world.projected, 0u);
+    EXPECT_EQ(world.projection_failures, 0u);
+    EXPECT_EQ(world.missing_world, 0u);
+
+    bool sawWorld = false;
+    for (const GlobalTrackUpdate& update : sink->updates) {
+        for (const Tracklet& segment : update.segments) {
+            for (const Observation& observation : segment.observations) {
+                sawWorld = sawWorld || observation.world.IsFinite();
+            }
+        }
+    }
+    EXPECT_TRUE(sawWorld);
+    (void)source;
 }
 
 } // namespace

@@ -1,0 +1,51 @@
+# TrafficMCMT camera calibration (stage 8).
+#
+# `homography` is row-major and maps image coordinates to the ground plane in
+# metres. With `homography_normalized: true` (the default) the input is
+# `(x / image_width, y / image_height)`, which makes the calibration
+# independent of the camera resolution. With `homography_normalized: false`
+# the input is raw pixels and `image_width` / `image_height` are required.
+#
+# `origin_lat` / `origin_lon` define the WGS-84 origin of the metric frame
+# produced by the homography. Cameras that must be fused into one ENU plane
+# should either share the same origin or let the Master translate them into
+# `calibration.shared_origin_*`.
+#
+# The Master accepts this YAML directly. Protobuf JSON/binary produced by
+# `CalibrationCodec` is also accepted by `master_node --calibration`.
+
+calibrations:
+  - camera_id: cam-01
+    has_homography: true
+    homography_normalized: true
+    # Illustrative affine mapping: normalised pixel -> [-100, 100] m.
+    homography: [200.0, 0.0, -100.0,
+                 0.0, 200.0, -100.0,
+                 0.0, 0.0, 1.0]
+    image_width: 1920
+    image_height: 1080
+    origin_lat: 32.606500
+    origin_lon: -85.488000
+    frame_id: enu
+    meters_per_pixel_at_ground: 0.05
+    reprojection_error_m: 0.25
+    source: manual
+    version: 1
+    entry_zone: [-100.0, -100.0, -50.0, -100.0, -50.0, -50.0, -100.0, -50.0]
+    exit_zone: [50.0, 50.0, 100.0, 50.0, 100.0, 100.0, 50.0, 100.0]
+
+  - camera_id: cam-02
+    has_homography: true
+    homography_normalized: true
+    homography: [200.0, 0.0, -100.0,
+                 0.0, 200.0, -100.0,
+                 0.0, 0.0, 1.0]
+    image_width: 1280
+    image_height: 720
+    origin_lat: 32.606500
+    origin_lon: -85.488000
+    frame_id: enu
+    meters_per_pixel_at_ground: 0.05
+    reprojection_error_m: 0.25
+    source: manual
+    version: 1

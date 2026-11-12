@@ -10,12 +10,12 @@
 #include "trafficmcmt/core/Tracklet.h"
 #include "trafficmcmt/core/Types.h"
 #include "trafficmcmt/emissions/EmissionSimulator.h"
-#include "trafficmcmt/map/AccelerationEstimator.h"
+#include "trafficmcmt/geo/AccelerationEstimator.h"
+#include "trafficmcmt/geo/TrailBuilder.h"
+#include "trafficmcmt/geo/VelocityEstimator.h"
 #include "trafficmcmt/map/MapConfig.h"
 #include "trafficmcmt/map/MapIdRegistry.h"
 #include "trafficmcmt/map/MapTypes.h"
-#include "trafficmcmt/map/TrailBuilder.h"
-#include "trafficmcmt/map/VelocityEstimator.h"
 
 namespace tmcmt::map {
 
@@ -75,9 +75,9 @@ private:
         int camera_id = 0;
         std::string class_name = "unknown";
         Timestamp last_seen{};
-        TrailBuilder trail;
-        VelocityEstimator velocity;
-        AccelerationEstimator acceleration;
+        geo::TrailBuilder trail;
+        geo::VelocityEstimator velocity;
+        geo::AccelerationEstimator acceleration;
         bool dirty = false;
         bool announced = false;
     };

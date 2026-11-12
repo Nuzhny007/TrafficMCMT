@@ -215,6 +215,54 @@ struct OnlineConfig {
 };
 
 // ---------------------------------------------------------------------------
+// BEV / world coordinates (stage 8)
+// ---------------------------------------------------------------------------
+
+/// Camera calibration source and hot-reload behaviour.
+struct CalibrationConfig {
+    /// YAML (or protobuf JSON/binary, loaded by the application) file.
+    /// Empty disables calibration loading.
+    std::string file;
+    /// Poll interval for the hot-reload watcher. 0 disables polling.
+    int reload_interval_ms = 1000;
+    /// Reject calibrations without a homography.
+    bool require_homography = false;
+    /// Re-project observations that already carry a valid world point.
+    bool overwrite_world = false;
+    /// Reject calibrations whose reported RMS exceeds this value. 0 disables.
+    double max_reprojection_error_m = 2.0;
+    /// Shared ENU origin. Zero means "derive from the first calibration or
+    /// tracklet that provides one".
+    double shared_origin_latitude = 0.0;
+    double shared_origin_longitude = 0.0;
+};
+
+/// World-track export written next to the regular result sinks.
+struct WorldOutputConfig {
+    /// off | geojson | csv
+    std::string format = "off";
+    std::string path;
+};
+
+/// BEV fusion and de-duplication options.
+struct BevConfig {
+    bool enabled = false;
+    /// Two observations from different cameras of the same global identity are
+    /// considered duplicates when they are closer than this.
+    double duplicate_distance_m = 1.5;
+    /// ... and closer in time than this.
+    int duplicate_window_ms = 500;
+    /// Sliding window for the least-squares velocity estimate.
+    int speed_window_ms = 1000;
+    /// Centred moving-average window for positions. 0 disables smoothing.
+    int smooth_window = 0;
+    /// When a pair has no world endpoints, fall back to the zone-based gate
+    /// instead of rejecting it as `missing_world`.
+    bool fallback_to_zone = true;
+    WorldOutputConfig world_output;
+};
+
+// ---------------------------------------------------------------------------
 // Root configuration
 // ---------------------------------------------------------------------------
 
@@ -239,6 +287,8 @@ struct MasterConfig {
     ClockSyncConfig clock_sync;
     WatermarkConfig watermark;
     OnlineConfig online;
+    CalibrationConfig calibration;
+    BevConfig bev;
     LogConfig log;
 
     /// Loads and validates the configuration. Never throws.

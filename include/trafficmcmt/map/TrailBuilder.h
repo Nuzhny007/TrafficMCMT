@@ -1,33 +1,9 @@
 #pragma once
 
-#include <cstddef>
-#include <vector>
-
-#include "trafficmcmt/core/Geo.h"
+// Compatibility header: the implementation moved to trafficmcmt_geo so that
+// the BEV module can share it without linking the map/protobuf stack.
+#include "trafficmcmt/geo/TrailBuilder.h"
 
 namespace tmcmt::map {
-
-/// Bounded ENU trail with distance-based decimation.
-class TrailBuilder {
-public:
-    TrailBuilder(std::size_t max_points, double min_distance_m);
-
-    void Add(const EnuPoint& point);
-
-    [[nodiscard]] const std::vector<EnuPoint>& Points() const noexcept {
-        return m_points;
-    }
-
-    [[nodiscard]] bool Empty() const noexcept {
-        return m_points.empty();
-    }
-
-    void Clear();
-
-private:
-    std::size_t m_maxPoints = 40;
-    double m_minDistanceSq = 0.0;
-    std::vector<EnuPoint> m_points;
-};
-
+using geo::TrailBuilder;
 } // namespace tmcmt::map

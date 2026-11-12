@@ -192,6 +192,14 @@ void ToProto(const CameraCalibration& calibration, proto::CameraCalibration& out
     out.set_meters_per_pixel_at_ground(calibration.meters_per_pixel_at_ground);
     out.set_frame_id(calibration.frame_id);
     out.set_updated_at_ms(calibration.updated_at_ms);
+    out.set_origin_lat(calibration.origin_latitude);
+    out.set_origin_lon(calibration.origin_longitude);
+    out.set_image_width(static_cast<std::uint32_t>(std::max(0, calibration.image_width)));
+    out.set_image_height(static_cast<std::uint32_t>(std::max(0, calibration.image_height)));
+    out.set_homography_normalized(calibration.homography_normalized);
+    out.set_reprojection_error_m(calibration.reprojection_error_m);
+    out.set_source(calibration.source);
+    out.set_version(calibration.version);
 }
 
 // ---------------------------------------------------------------------------
@@ -357,6 +365,19 @@ Result<CameraCalibration> FromProto(const proto::CameraCalibration& message) {
     out.meters_per_pixel_at_ground = message.meters_per_pixel_at_ground();
     out.frame_id = message.frame_id();
     out.updated_at_ms = message.updated_at_ms();
+    out.origin_latitude = message.origin_lat();
+    out.origin_longitude = message.origin_lon();
+    out.image_width = static_cast<int>(message.image_width());
+    out.image_height = static_cast<int>(message.image_height());
+    // Absent means the legacy normalised-pixel convention.
+    out.homography_normalized =
+        message.has_homography_normalized() ? message.homography_normalized() : true;
+    out.reprojection_error_m = message.reprojection_error_m();
+    out.source = message.source().empty() ? "manual" : message.source();
+    out.version = message.version();
+    if (!out.IsValid()) {
+        return MakeStatus(ErrorCode::InvalidArgument, "calibration is invalid");
+    }
     return out;
 }
 

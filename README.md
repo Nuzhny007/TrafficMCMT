@@ -31,7 +31,7 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 | 5. muSSP и глобальная ассоциация | ✅ `ssp`/`greedy`/`mussp`, IDF1/IDSW, offline CLI; muSSP — опционально |
 | 6. ZeroMQ транспорт | ✅ PUB/SUB, broker, result sink, edge simulator; smoke 60k msg без потерь |
 | 7. Синхронизация времени и out-of-order | ✅ clock sync, watermark, окна/commit_lag, online-режим; DoD на Auburn |
-| 8. BEV | ⬜ |
+| 8. BEV и мировые координаты | ✅ проекция, дедупликация, скорость/курс, GeoJSON/CSV; DoD на синтетике |
 
 ## Требования
 
@@ -269,24 +269,54 @@ ZMQ-режиме sync работает по парам `(tracklet.end, врем�
 вероятность обмена соседних сообщений, `--event-jitter-ms` — отдельный
 стресс-режим порчи меток времени. Детали — `docs/architecture.md` §8.7.
 
+BEV и мировые координаты (Этап 8):
+
+```powershell
+# калибровки: normalized H ([0,1]^2 -> метры) либо пиксельная H + image_width/height
+.\build\local-release\Release\trafficmcmt_master.exe `
+  --config configs\master.yaml --mode offline `
+  --calibration configs\calibration.example.yaml `
+  --out build\bev\results.jsonl `
+  --world-out build\bev\world.geojsonl --world-format geojson `
+  --stats-out build\bev\stats.json
+
+# CSV вместо GeoJSON: --world-format csv
+
+# DoD: проекция, дедупликация, скорость, смена разрешения, GeoJSON/CSV
+powershell -ExecutionPolicy Bypass -File scripts/smoke_bev.ps1
+```
+
+`--calibration` включает `bev.enabled`, загружает YAML/JSON/JSONL/protobuf и
+поддерживает hot-reload по mtime. `--world-out` добавляет `WorldTrackSink`
+(`geojson`/`csv`). GeoJSON при известном origin содержит WGS84 `[lon, lat]`,
+иначе ENU `[east, north]` с `frame`; CSV пишет заголовок и те же поля плюс
+`latitude`/`longitude`. `stats.world` — проекция на ingest, `stats.world_output`
+— дедупликация и слияние в sink. `bev.enabled` по умолчанию `false`,
+`world_output.format: off`. `trafficmcmt_associate` для offline-проверок
+принимает `--calibration`, `--gate`, `--max-speed-mps`, `--max-distance-m`,
+`--allow-missing-world`, `--no-bev-fallback`. Детали — `docs/architecture.md`
+§8.8.
+
 ## Структура
 
 ```
 include/trafficmcmt/core/   доменные типы, конфиг, Result, логирование, Geo (WGS84↔ENU)
+include/trafficmcmt/geo/    VelocityEstimator, TrailBuilder, AccelerationEstimator
 include/trafficmcmt/io/     codec, file source/sinks, normalizer, store
 include/trafficmcmt/edge/   ReID-экстракторы, EdgeTrackExporter, GeoBinding
 include/trafficmcmt/mtt/    адаптер Multitarget-tracker → Observation
-include/trafficmcmt/map/    MapFeed, MapProtocol, MapConfig, timeline, velocity, trail
+include/trafficmcmt/map/    MapFeed, MapProtocol, MapConfig, timeline
+include/trafficmcmt/bev/    калибровки, гомография, fusion, BEV-гейт, world output
 include/trafficmcmt/net/    ZeroMQ-транспорт (context, framer, source, publisher, result sink, broker)
                             и WebSocket-сервер/клиент (RFC 6455, без зависимостей)
 include/trafficmcmt/emissions/  HBEFA, Pasquill-Gifford, Gaussian puff, сетка концентраций
 include/trafficmcmt/reid/   IEmbeddingIndex, BruteForceIndex, FaissIndex, GalleryManager, ReIdMatcher
-include/trafficmcmt/st/     CameraLinkModel, TransitionEstimator, SpatialGate, StReIdScorer, PairCandidateGenerator
+include/trafficmcmt/st/     CameraLinkModel, TransitionEstimator, SpatialGate, BeVSpatialGate, StReIdScorer, PairCandidateGenerator
 include/trafficmcmt/flow/   TrackletGraph, GraphPruner, McfSolver, FlowAssociator, GlobalIdManager
 include/trafficmcmt/metrics/  MotMetrics (track-level IDF1/IDP/IDR/IDSW)
 include/trafficmcmt/pipeline/ MasterPipeline, WindowScheduler, TimestampBuffer, ClockSyncEstimator, ReplayGuard, MetricsCollector
 proto/                      protobuf-схемы v1 (tracklet, calibration, global)
-src/                        реализации core/io/edge/mtt/map/net/emissions/reid/st/flow/metrics/pipeline
+src/                        реализации core/geo/io/edge/mtt/map/bev/net/emissions/reid/st/flow/metrics/pipeline
 apps/master_node/           точка входа Master (offline/online, JSONL/ZMQ)
 apps/mtt_export/            видео → треклеты (Edge, OpenCV + MTT)
 apps/map_export/            треклеты → JSONL-кадры протокола v1
@@ -300,10 +330,10 @@ apps/associate/             offline-ассоциация: треклеты → �
 apps/broker/                XSUB/XPUB-форвардер для ZeroMQ
 apps/edge_simulator/        N виртуальных камер для нагрузочных прогонов
 tests/unit/                 unit-тесты (GTest)
-configs/                    примеры конфигурации (включая map_feed*.yaml, camera_links.yaml)
+configs/                    примеры конфигурации (map_feed*.yaml, camera_links.yaml, calibration.example.yaml)
 cmake/                      зависимости, warnings, runtime-DLL, package config
 docs/                       архитектура, roadmap, оценка ReID
-scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway, smoke_zmq, smoke_online, reid_eval_*
+scripts/                    run_aire, run_auburn_toomer, smoke_map_gateway, smoke_zmq, smoke_online, smoke_bev, reid_eval_*
 ```
 
 Viewer (`traffic-mcmt-viewer`) — отдельный репозиторий: React + deck.gl + MapLibre,

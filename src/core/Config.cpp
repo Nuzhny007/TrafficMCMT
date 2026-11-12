@@ -454,6 +454,76 @@ Status ParseMetrics(const YAML::Node& root, MetricsConfig& out) {
     return Status::Ok();
 }
 
+Status ParseCalibration(const YAML::Node& root, CalibrationConfig& out) {
+    YAML::Node node;
+    Status status = ReadSection(root, "calibration", node, "");
+    if (!status.ok()) {
+        return status;
+    }
+    const std::string where = "calibration";
+    if (!(status = ReadScalar(node, "file", out.file, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "reload_interval_ms", out.reload_interval_ms, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "require_homography", out.require_homography, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "overwrite_world", out.overwrite_world, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "max_reprojection_error_m", out.max_reprojection_error_m, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "shared_origin_lat", out.shared_origin_latitude, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "shared_origin_lon", out.shared_origin_longitude, where)).ok()) {
+        return status;
+    }
+    return Status::Ok();
+}
+
+Status ParseBev(const YAML::Node& root, BevConfig& out) {
+    YAML::Node node;
+    Status status = ReadSection(root, "bev", node, "");
+    if (!status.ok()) {
+        return status;
+    }
+    const std::string where = "bev";
+    if (!(status = ReadScalar(node, "enabled", out.enabled, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "duplicate_distance_m", out.duplicate_distance_m, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "duplicate_window_ms", out.duplicate_window_ms, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "speed_window_ms", out.speed_window_ms, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "smooth_window", out.smooth_window, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(node, "fallback_to_zone", out.fallback_to_zone, where)).ok()) {
+        return status;
+    }
+
+    YAML::Node output;
+    if (!(status = ReadSection(node, "world_output", output, where)).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(output, "format", out.world_output.format, "bev.world_output")).ok()) {
+        return status;
+    }
+    if (!(status = ReadScalar(output, "path", out.world_output.path, "bev.world_output")).ok()) {
+        return status;
+    }
+    return Status::Ok();
+}
+
 Status ParseMasterSection(const YAML::Node& root, MasterConfig& out) {
     YAML::Node node;
     Status status = ReadSection(root, "master", node, "");
@@ -679,6 +749,12 @@ Result<MasterConfig> MasterConfig::Load(const std::string& path) {
         status = ParseMetrics(root, config.metrics);
     }
     if (status.ok()) {
+        status = ParseCalibration(root, config.calibration);
+    }
+    if (status.ok()) {
+        status = ParseBev(root, config.bev);
+    }
+    if (status.ok()) {
         YAML::Node logNode;
         status = ReadSection(root, "log", logNode, "");
         if (status.ok()) {
@@ -855,6 +931,48 @@ Status MasterConfig::Validate() const {
         return fail("metrics.http_port", "must be in [1, 65535]");
     }
 
+    if (calibration.reload_interval_ms < 0) {
+        return fail("calibration.reload_interval_ms", "must be >= 0");
+    }
+    if (!(calibration.max_reprojection_error_m >= 0.0)) {
+        return fail("calibration.max_reprojection_error_m", "must be >= 0");
+    }
+    if (!std::isfinite(calibration.shared_origin_latitude) ||
+        !std::isfinite(calibration.shared_origin_longitude)) {
+        return fail("calibration.shared_origin", "must be finite");
+    }
+    const bool hasSharedLat = calibration.shared_origin_latitude != 0.0;
+    const bool hasSharedLon = calibration.shared_origin_longitude != 0.0;
+    if (hasSharedLat != hasSharedLon) {
+        return fail("calibration.shared_origin", "latitude and longitude must be set together");
+    }
+    if (bev.enabled && calibration.file.empty()) {
+        return fail("calibration.file", "must not be empty when bev.enabled is true");
+    }
+    if (calibration.overwrite_world && !bev.enabled) {
+        return fail("calibration.overwrite_world", "requires bev.enabled = true");
+    }
+    if (!(bev.duplicate_distance_m > 0.0)) {
+        return fail("bev.duplicate_distance_m", "must be > 0");
+    }
+    if (bev.duplicate_window_ms < 0) {
+        return fail("bev.duplicate_window_ms", "must be >= 0");
+    }
+    if (bev.speed_window_ms <= 0) {
+        return fail("bev.speed_window_ms", "must be > 0");
+    }
+    if (bev.smooth_window < 0) {
+        return fail("bev.smooth_window", "must be >= 0");
+    }
+    if (!EqualsIgnoreCase(bev.world_output.format, "off") &&
+        !EqualsIgnoreCase(bev.world_output.format, "geojson") &&
+        !EqualsIgnoreCase(bev.world_output.format, "csv")) {
+        return fail("bev.world_output.format", "expected one of: off|geojson|csv");
+    }
+    if (!EqualsIgnoreCase(bev.world_output.format, "off") && bev.world_output.path.empty()) {
+        return fail("bev.world_output.path", "must not be empty when a world output format is enabled");
+    }
+
     if (!IsKnownLogLevel(log.level)) {
         return fail("log.level", "unknown level '" + log.level + "'");
     }
@@ -971,6 +1089,23 @@ std::string Dump(const MasterConfig& config) {
 
     root["metrics"]["enabled"] = config.metrics.enabled;
     root["metrics"]["http_port"] = config.metrics.http_port;
+
+    root["calibration"]["file"] = config.calibration.file;
+    root["calibration"]["reload_interval_ms"] = config.calibration.reload_interval_ms;
+    root["calibration"]["require_homography"] = config.calibration.require_homography;
+    root["calibration"]["overwrite_world"] = config.calibration.overwrite_world;
+    root["calibration"]["max_reprojection_error_m"] = config.calibration.max_reprojection_error_m;
+    root["calibration"]["shared_origin_lat"] = config.calibration.shared_origin_latitude;
+    root["calibration"]["shared_origin_lon"] = config.calibration.shared_origin_longitude;
+
+    root["bev"]["enabled"] = config.bev.enabled;
+    root["bev"]["duplicate_distance_m"] = config.bev.duplicate_distance_m;
+    root["bev"]["duplicate_window_ms"] = config.bev.duplicate_window_ms;
+    root["bev"]["speed_window_ms"] = config.bev.speed_window_ms;
+    root["bev"]["smooth_window"] = config.bev.smooth_window;
+    root["bev"]["fallback_to_zone"] = config.bev.fallback_to_zone;
+    root["bev"]["world_output"]["format"] = config.bev.world_output.format;
+    root["bev"]["world_output"]["path"] = config.bev.world_output.path;
 
     root["log"]["level"] = config.log.level;
     root["log"]["file"] = config.log.file;

@@ -36,8 +36,40 @@ struct CameraCalibration {
     std::string frame_id = "map";
     std::int64_t updated_at_ms = 0;
 
+    /// WGS-84 origin of the metric frame produced by `homography`.
+    /// Zero means "not provided"; the consumer then falls back to the
+    /// tracklet origin or the shared configuration origin.
+    double origin_latitude = 0.0;
+    double origin_longitude = 0.0;
+
+    /// Frame size the calibration was made for. Required for pixel-space
+    /// homographies, ignored for normalised ones.
+    int image_width = 0;
+    int image_height = 0;
+
+    /// true: homography maps normalised pixels [0, 1] -> metres.
+    /// false: homography maps raw pixels -> metres.
+    bool homography_normalized = true;
+
+    /// RMS reprojection error of the control points, metres.
+    float reprojection_error_m = 0.f;
+
+    /// "manual" or "estimated".
+    std::string source = "manual";
+
+    /// Monotonic per-camera version used by the hot-reload store.
+    std::uint64_t version = 0;
+
+    [[nodiscard]] bool HasOrigin() const noexcept {
+        return std::isfinite(origin_latitude) && std::isfinite(origin_longitude) &&
+               (origin_latitude != 0.0 || origin_longitude != 0.0);
+    }
+
     [[nodiscard]] bool IsValid() const noexcept {
         if (camera_id.empty()) {
+            return false;
+        }
+        if (!std::isfinite(origin_latitude) || !std::isfinite(origin_longitude)) {
             return false;
         }
         if (!has_homography) {
@@ -47,6 +79,9 @@ struct CameraCalibration {
             if (!std::isfinite(value)) {
                 return false;
             }
+        }
+        if (!homography_normalized && (image_width <= 0 || image_height <= 0)) {
+            return false;
         }
         // Degenerate homography: last element must not be zero.
         return homography[8] != 0.0;

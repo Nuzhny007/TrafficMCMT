@@ -217,6 +217,14 @@ TEST(CalibrationCodec, RoundtripsBinaryAndJson) {
     calibration.entry_zone.xy = {0.f, 0.f, 10.f, 0.f, 10.f, 10.f, 0.f, 10.f};
     calibration.meters_per_pixel_at_ground = 0.05f;
     calibration.frame_id = "map";
+    calibration.origin_latitude = 32.606456;
+    calibration.origin_longitude = -85.481891;
+    calibration.image_width = 1920;
+    calibration.image_height = 1080;
+    calibration.homography_normalized = false;
+    calibration.reprojection_error_m = 0.25f;
+    calibration.source = "estimated";
+    calibration.version = 7;
 
     auto encoded = CalibrationCodec::EncodeBinary(calibration);
     ASSERT_TRUE(encoded) << encoded.status().ToString();
@@ -226,6 +234,14 @@ TEST(CalibrationCodec, RoundtripsBinaryAndJson) {
     EXPECT_TRUE(decoded.value().has_homography);
     EXPECT_EQ(decoded.value().homography, calibration.homography);
     EXPECT_EQ(decoded.value().entry_zone.xy, calibration.entry_zone.xy);
+    EXPECT_DOUBLE_EQ(decoded.value().origin_latitude, calibration.origin_latitude);
+    EXPECT_DOUBLE_EQ(decoded.value().origin_longitude, calibration.origin_longitude);
+    EXPECT_EQ(decoded.value().image_width, calibration.image_width);
+    EXPECT_EQ(decoded.value().image_height, calibration.image_height);
+    EXPECT_FALSE(decoded.value().homography_normalized);
+    EXPECT_FLOAT_EQ(decoded.value().reprojection_error_m, calibration.reprojection_error_m);
+    EXPECT_EQ(decoded.value().source, calibration.source);
+    EXPECT_EQ(decoded.value().version, calibration.version);
 
     auto json = CalibrationCodec::EncodeJson(calibration);
     ASSERT_TRUE(json) << json.status().ToString();
@@ -233,6 +249,14 @@ TEST(CalibrationCodec, RoundtripsBinaryAndJson) {
     ASSERT_TRUE(fromJson) << fromJson.status().ToString();
     EXPECT_EQ(fromJson.value().camera_id, calibration.camera_id);
     EXPECT_FLOAT_EQ(fromJson.value().meters_per_pixel_at_ground, calibration.meters_per_pixel_at_ground);
+    EXPECT_DOUBLE_EQ(fromJson.value().origin_latitude, calibration.origin_latitude);
+    EXPECT_DOUBLE_EQ(fromJson.value().origin_longitude, calibration.origin_longitude);
+    EXPECT_EQ(fromJson.value().image_width, calibration.image_width);
+    EXPECT_EQ(fromJson.value().image_height, calibration.image_height);
+    EXPECT_FALSE(fromJson.value().homography_normalized);
+    EXPECT_FLOAT_EQ(fromJson.value().reprojection_error_m, calibration.reprojection_error_m);
+    EXPECT_EQ(fromJson.value().source, calibration.source);
+    EXPECT_EQ(fromJson.value().version, calibration.version);
 }
 
 } // namespace

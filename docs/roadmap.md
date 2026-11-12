@@ -18,7 +18,7 @@
 | 5 | muSSP и глобальная ассоциация | 10–14 | ✅ | 3, 4 |
 | 6 | ZeroMQ транспорт | 6–8 | ✅ | 2 |
 | 7 | Синхронизация времени | 7–10 | ✅ | 5, 6 |
-| 8 | BEV и мировые координаты | 8–12 | ⬜ | 4 |
+| 8 | BEV и мировые координаты | 8–12 | ✅ | 4 |
 | 9 | Прод-обвязка (опция) | 5–7 | ⬜ | 6, 7 |
 
 **Итого:** 68–93 дней. Соло — 14–19 недель; два разработчика — 9–11 недель
@@ -705,22 +705,23 @@ offline/online. Добавлен `trafficmcmt_tracklet_perturb` (джиттер 
 доставки, reorder, отдельный `--event-jitter-ms`) и `scripts/smoke_online.ps1`.
 DoD на Auburn: online clean IDF1 = 1.0000, после ±2 с и 5% reorder — 1.0000
 (падение 0%), `too_late=0`; повторный реплей побайтово совпадает. `ctest`:
-242/242 (+1 skip) в `local-release`, 179/179 (+1 skip) в `ci-check`,
-294/294 (+1 skip) в `zmq-check`.
+311/311 (+1 skip) в `local-release`, 213/213 (+1 skip) в `ci-check`,
+328/328 (+1 skip) в `zmq-check`.
 
 ---
 
-## Этап 8. BEV и мировые координаты (8–12 дней) ⬜
+## Этап 8. BEV и мировые координаты (8–12 дней) ✅
 
 **Цель:** метры, дедупликация в зонах перекрытия, скорость/курс.
 
 ### Задачи
 
-- [ ] `HomographyProjector` — H из калибровки / `findHomography` / HomLib
-- [ ] `CameraCalibrationStore` — YAML/protobuf, версии, hot-reload
-- [ ] `WorldTrajectoryFusion` — проекция, сглаживание, слияние, скорость
-- [ ] `BeVSpatialGate` — расстояние в метрах
-- [ ] `WorldTrackSink` — GeoJSON/CSV
+- [x] `HomographyProjector` — H из калибровки; `HomographySolver` (DLT/RANSAC, без OpenCV)
+- [x] `CameraCalibrationStore` — YAML/JSON/JSONL/protobuf, версии, hot-reload
+- [x] `WorldTrajectoryFusion` — проекция, сглаживание, слияние, скорость/курс
+- [x] `BeVSpatialGate` — расстояние в метрах, fallback на zone
+- [x] `WorldTrackSink` — GeoJSON/CSV
+- [x] `trafficmcmt_geo` — `VelocityEstimator`/`TrailBuilder`/`AccelerationEstimator`
 
 ### DoD
 
@@ -735,6 +736,21 @@ DoD на Auburn: online clean IDF1 = 1.0000, после ±2 с и 5% reorder —
 - Контрольные точки калибровки.
 - Слияние двух перекрывающихся камер.
 - Fallback на zone-based при отсутствии H.
+
+### Реализация и проверка
+
+- Проекция выполняется в `MasterPipeline::Ingest`/`RunOffline` до `AddToStore`
+  и `MakeEndpoint`, поэтому гейт, st-ReID и sinks работают в метрах.
+- Калибровки нормализованы (`homography_normalized: true`): H переводит
+  `[0,1]²` в метры; пиксельная H поддержана флагом `false` + размером кадра.
+- `trafficmcmt_bev` — CPU-only, линкует `core` + `geo` + `st`, без
+  OpenCV/protobuf; `bev.enabled` по умолчанию `false`.
+- `scripts/smoke_bev.ps1`: 8 объектов × 2 камеры, handoff +100 мс, 2 м/с.
+  Ошибка проекции 0.025 м (1920×1080) и 0.038 м (1280×720); скорость 1.993 и
+  1.989 м/с; 40/40 дублей подавлено; partition совпадает; расхождение позиций
+  между разрешениями 0.052 м; GeoJSON и CSV валидны.
+- `ctest`: 311/311 (+1 skip) в `local-release`, 213/213 (+1 skip) в `ci-check`,
+  328/328 (+1 skip) в `zmq-check`.
 
 ---
 

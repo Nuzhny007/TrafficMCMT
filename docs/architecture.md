@@ -187,15 +187,16 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | Таргет | Ключевые классы | Зависимости |
 |---|---|---|
 | `trafficmcmt_core` | `Tracklet`, `CameraCalibration`, `MasterConfig`, `Result<T>`, `Log` | spdlog, yaml-cpp |
+| `trafficmcmt_geo` | `VelocityEstimator`, `TrailBuilder`, `AccelerationEstimator` | core |
 | `trafficmcmt_proto` | сгенерированные `tracklet.pb.*`, `calibration.pb.*`, `global.pb.*` | protobuf |
 | `trafficmcmt_io` | `TrackletCodec`, `FileTrackletSource`, `TrackletNormalizer`, `InMemoryTrackletStore`, `JsonlTrackletSink`, `BinaryTrackletSink`, `JsonlResultSink`; заголовки `ITrackletSource`/`IResultSink` доступны без protobuf | protobuf |
 | `trafficmcmt_edge` | `IReIdExtractor`, `ColorHistogramReIdExtractor`, `DnnReIdExtractor`, `TypeAwareReIdExtractor`, `GeoBinding`, `EdgeTrackExporter` | OpenCV (core, imgproc, dnn, calib3d) |
 | `trafficmcmt_reid` | `IEmbeddingIndex`, `BruteForceIndex`, `FaissIndex`, `EmbeddingNormalizer`, `GalleryManager`, `ReIdMatcher` | FAISS (opt.), Eigen |
-| `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon` | core, reid (Eigen) |
+| `trafficmcmt_st` | `CameraLinkModel`, `TransitionEstimator`, `SpatialGate`, `BeVSpatialGate`, `StReIdScorer`, `PairCandidateGenerator`, `TrackletEndpoint`, `Polygon` | core, reid (Eigen) |
 | `trafficmcmt_flow` | `TrackletGraph`, `GraphPruner`, `MuSspSolver`, `SspSolver`, `GreedyAssociator`, `FlowAssociator`, `GlobalIdManager` | core, muSSP (opt.) |
-| `trafficmcmt_bev` | `HomographyProjector`, `WorldTrajectoryFusion` | OpenCV core, Eigen |
+| `trafficmcmt_bev` | `HomographyProjector`, `HomographySolver`, `CameraCalibrationStore`, `WorldTrajectoryFusion`, `WorldTrackSink`; forwarding-заголовок `BeVSpatialGate` | core, geo, st, Eigen (без OpenCV/protobuf) |
 | `trafficmcmt_net` | `ZmqContext`, `MessageFramer`, `SequenceTracker`, `ZmqTrackletSource`, `ZmqTrackletPublisher`, `ZmqResultSink`, `ZmqBroker`; WebSocket server/client | libzmq/cppzmq (opt.), protobuf (для ZMQ); WebSocket — платформенные сокеты |
-| `trafficmcmt_map` | `MapConfig`, `MapFeed`, `MapProtocol`, `TrackletTimeline`, `VelocityEstimator`, `TrailBuilder`, `MapIdRegistry` | core, yaml-cpp |
+| `trafficmcmt_map` | `MapConfig`, `MapFeed`, `MapProtocol`, `TrackletTimeline`, `MapIdRegistry`; `VelocityEstimator`/`TrailBuilder` — forwarding в `geo` | core, geo, yaml-cpp |
 | `trafficmcmt_emissions` | `EmissionSimulator`, `HbefaEmissionModel`, `PasquillGifford`, `GaussianPuffModel`, `ConcentrationGrid` | core |
 | `trafficmcmt_pipeline` | `MasterPipeline`, `WindowScheduler`, `TimestampBuffer`, `ClockSyncEstimator`, `ReplayGuard`, `MetricsCollector` | core, reid, st, flow, metrics; без protobuf |
 | `trafficmcmt_mtt` | `MttTrackAdapter` | **MTTracking::mtracking**, OpenCV |
@@ -211,7 +212,11 @@ JSONL-кадры v1) и `trafficmcmt_map_gateway` (WebSocket-реплей кад
 `trafficmcmt_associate` (offline: треклеты → глобальные ID, опционально IDF1/IDSW).
 Этап 7 подключает `trafficmcmt_master` к `MasterPipeline` (offline/online, JSONL и
 ZMQ ingest, `--out`/`--stats-out`/`--dump-raw`/`--gt`) и добавляет
-`trafficmcmt_tracklet_perturb` (out-of-order поток для DoD).
+`trafficmcmt_tracklet_perturb` (out-of-order поток для DoD). Этап 8 добавляет в
+`trafficmcmt_master` флаги `--calibration`, `--world-out`, `--world-format`, в
+`trafficmcmt_associate` — `--calibration`/`--gate`/`--max-speed-mps`/
+`--max-distance-m`/`--allow-missing-world`/`--no-bev-fallback`, а также
+`scripts/smoke_bev.ps1` (проекция, дедупликация, скорость, GeoJSON/CSV).
 
 ### 6.1. Публичный контракт
 
@@ -954,6 +959,62 @@ online (возмущённый), сравнивает IDF1 и повторяет
 его переупорядочить. Отдельный `--event-jitter-ms` портит сами метки и служит
 стресс-тестом, а не сценарием DoD.
 
+### 8.8. BEV, мировые координаты и world output (Этап 8)
+
+**Калибровки.** `CameraCalibration` хранит гомографию `3×3`, необязательный
+WGS84-origin и размер кадра. По умолчанию H задана в нормализованных пикселях
+`[0, 1]` (`homography_normalized: true`): точка `(u, v)` переводится в метры
+общего ENU-фрейма. Для пиксельной H (`homography_normalized: false`) обязательны
+`image_width`/`image_height`; проектор сам делит координаты на размер кадра,
+поэтому смена разрешения не меняет метрику. `CameraCalibrationStore` отдаёт
+immutable snapshots (`shared_ptr<const CameraCalibration>`), поддерживает
+YAML/JSON/JSONL/protobuf, hot-reload по mtime и версии, защищающие от отката
+снимка при ошибке парсинга.
+
+**Проекция.** `HomographyProjector` проецирует bottom-center bbox (точку
+касания земли) и умеет обратное преобразование. Точки у горизонта и
+необратимые H отбрасываются и считаются в `projection_failures`, а не роняют
+пайплайн. `HomographySolver` — чистый C++ (DLT + Jacobi + детерминированный
+RANSAC, seed `0x5EED`), без OpenCV. `MasterPipeline` выполняет `Normalize` на
+ingest **до** `AddToStore`/`MakeEndpoint`, поэтому BEV-гейт, st-ReID и sinks
+видят уже метры; offline-путь нормализует так же.
+
+**Слияние.** `WorldTrajectoryFusion` проецирует отсутствующие world-точки,
+переводит координаты камер в общий origin, подавляет дубли между разными
+камерами одного `global_id` (совпадение типа, `duplicate_window_ms` и
+`duplicate_distance_m`), сглаживает позицию и считает скорость/курс. Порядок
+обхода детерминирован: `(ts, camera, tracklet_id)`, tie-break по `quality`,
+затем `tracklet_id`.
+
+**Гейт.** `BeVSpatialGate` — тонкая обвязка над `st::SpatialGate` в режиме
+`bev`: `d ≤ max_distance_m` и `d ≤ v_max·Δt`. Если известны только частичные
+world-endpoints (`from.exit`, `to.entry`), при `bev.fallback_to_zone: true`
+используется zone-проверка; полный world всегда идёт через BEV.
+
+**World output.** `WorldTrackSink` — `IResultSink`, который сам применяет
+`WorldTrajectoryFusion::Fuse` к каждому update. GeoJSONL пишет Point-фичи с
+полями `global_id`, `tracklet_id`, `camera`, `type`, `ts_ms`, `east`, `north`,
+`frame`, `speed_mps`, `course_deg`, `is_final`, границами траектории и
+`duplicates_suppressed`; при известном origin координаты — WGS84 `[lon, lat]`
+(`frame: wgs84`), иначе ENU `[east, north]` (`frame: enu`). CSV содержит тот же
+набор полей плюс `latitude`/`longitude` и строку заголовка.
+
+**Конфигурация и CLI.** Секции `calibration` и `bev` в `MasterConfig`;
+`bev.enabled` по умолчанию `false`, `bev.fallback_to_zone: true`,
+`world_output.format: off`. `master_node --calibration` включает BEV и грузит
+store, `--world-out`/`--world-format` добавляют sink; `associate` принимает те
+же калибровки и параметры гейта для offline-проверок. Статистика
+`stats.world` описывает `Normalize` в пайплайне, `stats.world_output` — fusion
+внутри sink.
+
+**DoD и проверка.** `scripts/smoke_bev.ps1` строит синтетический поток из 8
+объектов и 2 камер (handoff +100 мс, 2 м/с, шаг 100 мс), прогоняет его с
+нормализованными H для 1920×1080 и 1280×720 и проверяет: ошибку проекции
+< 0.5 м, подавление ≥ 90% ожидаемых дублей, скорость ±10%, совпадение
+st-ReID-разбиения при смене разрешения, формат GeoJSON и CSV. Локальный прогон:
+ошибка 0.025–0.038 м, скорость 1.989–1.993 м/с, 40/40 дублей, расхождение
+позиций между разрешениями 0.052 м.
+
 ## 9. Нефункциональные требования
 
 | Требование | Цель |
@@ -992,8 +1053,18 @@ p99 «ingest → association» честно измеряется после по
 - unit-тесты: все 24 перестановки порядка, watermark при молчащей камере,
   дрейф 100 ppm, детерминизм `WindowScheduler`, 3 камеры с разными смещениями
   часов, переоткрытие окна поздним сообщением;
-- `ctest`: `local-release` 242/242 (+1 skip), `ci-check` 179/179 (+1 skip,
-  без protobuf — master в stub-режиме), `zmq-check` 294/294 (+1 skip).
+- `ctest`: `local-release` 311/311 (+1 skip), `ci-check` 213/213 (+1 skip,
+  без protobuf — master в stub-режиме), `zmq-check` 328/328 (+1 skip).
+
+Локальная проверка Этапа 8 (Windows, MSVC 19.52):
+
+- `scripts/smoke_bev.ps1`: 8 объектов × 2 камеры, handoff +100 мс, 2 м/с;
+  проекция 1920×1080 — ошибка 0.025 м, 1280×720 — 0.038 м (лимит 0.5 м);
+  скорость 1.993 / 1.989 м/с (отклонение < 1%, лимит ±10%); подавлено 40 из
+  40 ожидаемых дублей (5 на объект, лимит ≥ 90%); partition assignments
+  совпадает, максимальное расхождение позиций между разрешениями 0.052 м;
+  GeoJSON и CSV содержат заголовок/строки, `world.projected > 0`,
+  `projection_failures = 0`, `missing_world = 0`.
 
 Ограничение: онлайн-ассоциация локальна окну, а идентичности между окнами
 переносятся через перекрытие (`window_overlap_ms`). Окно должно покрывать
@@ -1053,9 +1124,9 @@ p99 «ingest → association» честно измеряется после по
 | 3. Топология | ✅ зафиксировано |
 | 4. Потоки данных | ✅ зафиксировано |
 | 5. Режимы | ✅ зафиксировано |
-| 6. Модули/API | 🟡 `core`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `st`, `flow`, `metrics`, `map`, `net`, `emissions`, `pipeline` реализованы; `bev` — план |
+| 6. Модули/API | ✅ `core`, `geo`, `proto`, `io`, `edge` (ReID, geo, exporter), `reid`, `st`, `flow`, `metrics`, `map`, `net`, `emissions`, `bev`, `pipeline` реализованы |
 | 7. Протокол | ✅ v1 + файловый I/O (JSONL / framed protobuf, int8); §7.5 — геопривязка, время, ReID по типу; §7.7 — `emission_grid` |
-| 8. Алгоритмы | 🟡 `GeoBinding` (метры), ReID-индекс/галереи/матчер, st-ReID, MCF, онлайн-окна и clock sync готовы; BEV — Этап 8 |
+| 8. Алгоритмы | ✅ `GeoBinding` (метры), ReID-индекс/галереи/матчер, st-ReID, MCF, онлайн-окна и clock sync, BEV-проекция/дедупликация/скорость готовы |
 | 9. НФТ | 📋 измеряется с Этапа 6; online-латентность — на Этапе 7 |
-| 10. Тесты/деплой | 🟡 242 unit-теста в `local-release` (+1 skip), 179 в `ci-check` без protobuf, 294 в `zmq-check`; smoke на `aire`, Auburn, `smoke_zmq.ps1` и `smoke_online.ps1`; деплой — Этап 9 |
+| 10. Тесты/деплой | 🟡 311 unit-тестов в `local-release` (+1 skip), 213 в `ci-check` без protobuf, 328 в `zmq-check`; smoke на `aire`, Auburn, `smoke_zmq.ps1`, `smoke_online.ps1`, `smoke_bev.ps1`; деплой — Этап 9 |
 | 11. ADR | ✅ |
