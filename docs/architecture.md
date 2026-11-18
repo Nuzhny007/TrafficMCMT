@@ -60,11 +60,11 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 | Компонент | Расположение | Версия / примечание |
 |---|---|---|
 | Multitarget-tracker (исходники) | `C:\work\home\mtracker\TrafficMCMT\Multitarget-tracker` | master, локальный клон — можно править |
-| Multitarget-tracker (install) | `...\Multitarget-tracker\install` | 1.1.0, MSVC 14.51.36231 (VS 2026), OpenCV 4.12 |
-| CMake-конфиг MTT | `...\install\lib\MTTracking\cmake` | `MTTracking_DIR` |
-| CMake-таргеты MTT | `MTTracking::mtracking`, `MTTracking::mdetection`, `MTTracking::inih` | `mtracking` → только `inih`; `mdetection` → OpenCV DNN |
+| Multitarget-tracker (install, TensorRT) | `C:\work\home\mtracker\Multitarget-tracker\install` | 1.1.0, тот же коммит master; сборка с `BUILD_ONNX_TENSORRT=ON` |
+| CMake-конфиг MTT | `...\install\lib\MTTracking\cmake` | `MTTracking_DIR` в `CMakeUserPresets.json` |
+| CMake-таргеты MTT | `MTTracking::mtracking`, `MTTracking::mdetection`, `MTTracking::yolo_rt_lib`, `MTTracking::inih` | `mtracking` → только `inih`; `mdetection` → OpenCV DNN + TensorRT-детектор; `yolo_rt_lib` — shared, нужен в PATH |
 | Include MTT | `MTTracking_INCLUDE_DIR` | интерфейсных include-путей у таргетов нет |
-| OpenCV | `C:\work\tools\vcpkg\installed\x64-windows\share\opencv4` | 4.12.0, ABI совпадает с `mtracking.lib` |
+| OpenCV | `C:\work\libraries\opencv\main\rel_cuda_13` | 4.14.0, сборка с CUDA (динамическая, DLL в `bin\Release`) |
 | Protobuf | `C:\work\tools\vcpkg\installed\x64-windows\share\protobuf` | 33.4.0, `protobuf::libprotobuf` + `protobuf::protoc` |
 | spdlog | `C:\work\libraries\spdlog\rel\install` | `spdlog::spdlog` |
 | yaml-cpp | `C:\work\libraries\yaml\yaml-cpp_build\install` | `yaml-cpp::yaml-cpp` |
@@ -81,20 +81,24 @@ Edge (Multitarget-tracker)  →  треклеты  →  Master (TrafficMCMT)  �
 - `mtracking/EmbeddingsCalculator.hpp` в установленных заголовках закрыт
   `#ifdef USE_OCV_EMBEDDINGS`, который потребителю не пробрасывается → Edge использует
   собственный `IReIdExtractor`.
-- MTT пересобран из локального клона master тем же компилятором, что и TrafficMCMT
-  (`MSVC 14.51.36231`, VS 2026), с `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`,
-  `USE_OCV_EMBEDDINGS=OFF`, потому что в vcpkg OpenCV 4.12 нет `opencv_tracking`,
-  а `USE_OCV_EMBEDDINGS` добавлял зависимость от `opencv_dnn` с другим inline-namespace.
+- MTT берётся из второго локального клона master
+  (`C:\work\home\mtracker\Multitarget-tracker`, тот же коммит, что и клон в
+  TrafficMCMT) с `USE_OCV_KCF=OFF`, `USE_OCV_UKF=OFF`, `USE_OCV_EMBEDDINGS=OFF`;
+  сборка против OpenCV 4.14 CUDA. Инсталл обновляется
+  `cmake --install <mtt-build> --config Release` из его build-каталога.
 - В актуальном master MTT класс `CTracker` заменён на `BaseTracker`
   (`mtracking/BaseTracker.h`), `CreateTracker(settings, fps)` принимает fps, а
   `UpdateMat` — `time_point_t` вместо fps. Экспортёр использует новый API.
-- `mdetection` собирается без CUDA/TensorRT: достаточно OpenCV DNN, он нужен только
-  для полноты экспортируемого набора MTT.
+- `mdetection` собран с `BUILD_ONNX_TENSORRT=ON`: детектор `yolo26m` работает
+  на GPU через TensorRT (`detector_backend = 5`, `net_type = YOLOV26`,
+  `inference_precision = FP16`); OpenCV DNN остаётся доступен как
+  `detector_backend = 6`.
 - `trafficmcmt_mtt_export` — единственное приложение, которое линкует
-  `MTTracking::mdetection`; `trafficmcmt_mtt` и Master остаются без него.
+  `MTTracking::mdetection` (и `MTTracking::yolo_rt_lib`, когда инсталл MTT
+  собран с TensorRT); `trafficmcmt_mtt` и Master остаются без него.
 - Детектор создаётся через `BaseDetector::CreateDetector` с `config_t` из
-  `configs/detectors/*.ini`; поддерживаются `YOLOV8`, `YOLO11`, `DFINE` на COCO.
-  Лишние классы отключаются `white_list` (в MTT это `;`-список типов).
+  `configs/detectors/*.ini`; поддерживаются `YOLOV8`, `YOLOV26`, `YOLO11`, `DFINE`
+  на COCO. Лишние классы отключаются `white_list` (в MTT это `;`-список типов).
 - Геопривязка реализована в `trafficmcmt_edge` (`GeoBinding`) и не зависит от
   примеров MTT; формулы WGS84→ENU совпадают с `LocalPlane` из MTT.
 
@@ -566,7 +570,8 @@ MapFrame{EmissionGrid} ──> MapProtocol ──> WebSocket ──> viewer
   "rows": 90,
   "fields": {
     "NOx": {"data": "<base64 f32 LE>", "max": 719.0, "mean": 1.2, "p95": 169.0}
-  }
+  },
+  "totals_g": {"NOx": 12.5, "CO": 3.1, "PM2.5": 0.4, "PM10": 0.8, "CO2": 950.2}
 }
 ```
 
@@ -577,6 +582,12 @@ MapFrame{EmissionGrid} ──> MapProtocol ──> WebSocket ──> viewer
 Viewer рисует поле через `BitmapLayer` с логарифмической палитрой на каждый
 загрязнитель.
 
+`totals_g` — аддитивное расширение (масса выбросов): накопленная с начала
+потока масса по каждому загрязнителю в граммах, сумма масс выпущенных puff'ов
+HBEFA-модели. Масса выброшенных за лимитом `max_puffs` puff'ов продолжает
+учитываться: totals описывают выбросы, а не то, что сейчас в воздухе. Старые
+клиенты поле игнорируют.
+
 **Конфигурация.**
 
 ```yaml
@@ -586,6 +597,11 @@ emissions:
   wind:
     speed_mps: 3.0
     from_deg: 270
+  # Только объекты внутри полигона привязки камеры (расширенного на
+  # zone_margin_m метров) становятся эмиттерами: проекции у горизонта несут
+  # огромную ошибку и порождают фиктивные источники.
+  zone_filter: true
+  zone_margin_m: 10
   source_height_m: 0.5
   breathing_height_m: 1.5
   puff_interval_s: 1.0

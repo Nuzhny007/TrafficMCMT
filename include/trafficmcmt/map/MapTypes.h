@@ -60,6 +60,8 @@ struct MapEmissionGrid {
     int rows = 0;
     /// Indexed by `emissions::Pollutant`: NOx, CO, PM2.5, PM10, CO2.
     std::array<MapEmissionField, 5> fields;
+    /// Cumulative released mass per pollutant, grams, since the feed start.
+    std::array<double, 5> totals_g{};
 };
 
 /// Protocol v1 frame. The JSON writer lives in `MapProtocol.cpp`.

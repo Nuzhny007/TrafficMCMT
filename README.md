@@ -137,8 +137,9 @@ powershell -ExecutionPolicy Bypass -File scripts/smoke_map_gateway.ps1
 
 Выбросы и концентрации (Этап 2c) считаются тем же `map_gateway`: при включённой
 секции `emissions:` он раз в секунду шлёт кадр `emission_grid` (NOx, CO, PM2.5,
-PM10, CO2 в мкг/м³). Модель — HBEFA + Gaussian puff, происхождение таблицы и
-лицензии описаны в [`docs/emissions-attribution.md`](docs/emissions-attribution.md).
+PM10, CO2 в мкг/м³, плюс накопленная масса `totals_g` в граммах). Модель —
+HBEFA + Gaussian puff, происхождение таблицы и лицензии описаны в
+[`docs/emissions-attribution.md`](docs/emissions-attribution.md).
 
 ReID: индекс, галереи и оценка (Этап 3):
 

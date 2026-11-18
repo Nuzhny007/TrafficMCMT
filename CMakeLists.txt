@@ -458,6 +458,12 @@ if(TARGET trafficmcmt_mtt AND TARGET trafficmcmt_io)
             trafficmcmt_mtt
             trafficmcmt_io
             MTTracking::mdetection)
+    # The TensorRT detector backend lives in a shared yolo_rt_lib that
+    # MTTracking::mdetection references when it is built with
+    # BUILD_ONNX_TENSORRT; absent for CPU-only MTTracking installs.
+    if(TARGET MTTracking::yolo_rt_lib)
+        target_link_libraries(trafficmcmt_mtt_export PRIVATE MTTracking::yolo_rt_lib)
+    endif()
     tmcmt_set_warnings(trafficmcmt_mtt_export)
     tmcmt_copy_runtime_dependencies(trafficmcmt_mtt_export)
 endif()

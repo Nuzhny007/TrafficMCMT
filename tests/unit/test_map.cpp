@@ -606,6 +606,25 @@ TEST(MapProtocol, SerialisesEmissionGrid) {
     }
 }
 
+TEST(MapProtocol, SerialisesEmissionTotals) {
+    map::MapFrame frame;
+    frame.type = map::MapFrameType::EmissionGrid;
+    frame.timestamp = Timestamp(1234);
+
+    map::MapEmissionGrid grid;
+    grid.south_west = GeoPoint{32.60, -85.49};
+    grid.north_east = GeoPoint{32.61, -85.48};
+    grid.cols = 1;
+    grid.rows = 1;
+    grid.fields[0].values = {1.0f};
+    grid.totals_g[0] = 12.5;  // NOx
+    frame.emission = grid;
+
+    const std::string json = map::ToJson(frame);
+    EXPECT_NE(json.find("\"totals_g\":{\"NOx\":12.500,\"CO\":0.000,\"PM2.5\":0.000,\"PM10\":0.000,\"CO2\":0.000}"),
+              std::string::npos);
+}
+
 map::MapFeedConfig MakeEmissionFeedConfig() {
     map::MapFeedConfig config = MakeFeedConfig();
     config.emissions.enabled = true;
@@ -661,6 +680,48 @@ TEST(MapFeed, EmissionSnapshotIsNullWhenDisabled) {
     EXPECT_FALSE(feed.EmissionSnapshot(Timestamp(0)).has_value());
 }
 
+TEST(MapFeed, EmissionZoneFilterDropsRemoteTracks) {
+    map::MapFeedConfig config = MakeEmissionFeedConfig();
+    config.emission_zone_filter = true;
+    config.emission_zone_margin_m = 10.0;
+    // Small quad around the origin (~33 m half-width): the near track stays
+    // inside, the 500 m offset is well past its boundary and margin.
+    config.cameras.front().polygon = {
+        GeoPoint{kOriginLat - 0.0003, kOriginLon - 0.0003},
+        GeoPoint{kOriginLat - 0.0003, kOriginLon + 0.0003},
+        GeoPoint{kOriginLat + 0.0003, kOriginLon + 0.0003},
+        GeoPoint{kOriginLat + 0.0003, kOriginLon - 0.0003},
+    };
+
+    // A track inside the (km-scale) binding polygon becomes an emitter.
+    map::MapFeed insideZone(config);
+    const Tracklet nearTrack = MakeTracklet("cam-01", 1, ObjectType::Car,
+                                            {Timestamp(0), Timestamp(1000), Timestamp(2000)}, 5.0);
+    for (const Observation& observation : nearTrack.observations) {
+        insideZone.Observe(nearTrack, observation);
+        (void)insideZone.Tick(observation.ts);
+    }
+    const std::optional<map::MapFrame> insideFrame = insideZone.EmissionSnapshot(Timestamp(2000));
+    ASSERT_TRUE(insideFrame.has_value() && insideFrame->emission.has_value());
+    EXPECT_GT(insideFrame->emission->totals_g[0], 0.0);
+
+    // 500 m east of the origin the ground projection is far past the binding
+    // polygon (a horizon track in the real feed): no puffs, no released mass.
+    Tracklet farTrack = MakeTracklet("cam-01", 2, ObjectType::Car,
+                                     {Timestamp(0), Timestamp(1000), Timestamp(2000)}, 5.0);
+    for (Observation& observation : farTrack.observations) {
+        observation.world.x += 500.f;
+    }
+    map::MapFeed outsideZone(config);
+    for (const Observation& observation : farTrack.observations) {
+        outsideZone.Observe(farTrack, observation);
+        (void)outsideZone.Tick(observation.ts);
+    }
+    const std::optional<map::MapFrame> outsideFrame = outsideZone.EmissionSnapshot(Timestamp(2000));
+    ASSERT_TRUE(outsideFrame.has_value() && outsideFrame->emission.has_value());
+    EXPECT_EQ(outsideFrame->emission->totals_g[0], 0.0);
+}
+
 // ---------------------------------------------------------------------------
 // Emission configuration
 // ---------------------------------------------------------------------------
@@ -675,6 +736,8 @@ TEST(MapConfig, LoadsEmissionSection) {
                           "  wind: {speed_mps: 2.5, from_deg: 180}\n"
                           "  pm25_fraction: 0.4\n"
                           "  grid_hz: 2\n"
+                          "  zone_filter: true\n"
+                          "  zone_margin_m: 12\n"
                           "  grid:\n"
                           "    center_lat: 32.606456\n"
                           "    center_lon: -85.481891\n"
@@ -697,6 +760,8 @@ TEST(MapConfig, LoadsEmissionSection) {
     EXPECT_TRUE(value.emissions.grid.has_center);
     EXPECT_DOUBLE_EQ(value.emissions.grid.width_m, 300.0);
     EXPECT_DOUBLE_EQ(value.emissions.grid.cell_m, 4.0);
+    EXPECT_TRUE(value.emission_zone_filter);
+    EXPECT_DOUBLE_EQ(value.emission_zone_margin_m, 12.0);
 }
 
 TEST(MapConfig, RejectsInvalidEmissionValues) {

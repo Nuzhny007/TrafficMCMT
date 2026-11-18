@@ -67,6 +67,7 @@ struct Options {
     int minArea = 0;
     float minConfidence = 0.f;
     int minTraceLength = 2;
+    bool robustTracks = false;
 
     std::string detectorSettings;
     std::string whiteList;
@@ -101,7 +102,8 @@ void PrintUsage(std::string_view program) {
               << "  --detector-settings <ini>  Multitarget-tracker settings (opencv_dnn detector)\n"
               << "  --white-list <types>       Semicolon-separated object types to keep\n"
               << "  --min-confidence <x>       Minimum track confidence, <0 disables (default: 0)\n"
-              << "  --min-trace <n>            Minimum MTT trace length (default: 2)\n\n"
+              << "  --min-trace <n>            Minimum MTT trace length (default: 2)\n"
+              << "  --robust-tracks            Export only robust tracks: IsRobust(3, 0.5, (0.1, 8), 2)\n\n"
               << "Geometry:\n"
               << "  --geo-bind <ini>           Multitarget-tracker geo_bind.ini (image -> ENU)\n"
               << "  --geo-origin <lat,lon>     Shared ENU origin (required for multi-camera)\n"
@@ -298,6 +300,8 @@ std::optional<Options> ParseArgs(int argc, char** argv, std::string& error) {
                 error = "invalid value for --min-trace: " + *value;
                 return std::nullopt;
             }
+        } else if (arg == "--robust-tracks") {
+            options.robustTracks = true;
         } else if (arg == "--detector-settings") {
             auto value = nextValue("--detector-settings");
             if (!value) {
@@ -668,6 +672,7 @@ int main(int argc, char** argv) {
     tmcmt::MttAdapterOptions adapterOptions;
     adapterOptions.min_confidence = options->minConfidence;
     adapterOptions.min_trace_length = options->minTraceLength;
+    adapterOptions.robust_filter = options->robustTracks;
     tmcmt::MttTrackAdapter adapter(adapterOptions);
 
     tmcmt::EdgeExportConfig exportConfig;

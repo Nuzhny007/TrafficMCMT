@@ -46,6 +46,13 @@ struct MapFeedConfig {
     /// keep producing exactly the same frames.
     emissions::EmissionConfig emissions;
 
+    /// Restrict emission sources to the camera binding polygons: track
+    /// positions outside any polygon, expanded by `emission_zone_margin_m`
+    /// metres, do not become emitters. Guards against the huge ground
+    /// projection errors near the image horizon.
+    bool emission_zone_filter = false;
+    double emission_zone_margin_m = 10.0;
+
     std::vector<MapCameraConfig> cameras;
 
     [[nodiscard]] const MapCameraConfig* FindCamera(const CameraId& id) const noexcept;

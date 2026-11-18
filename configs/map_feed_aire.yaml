@@ -27,6 +27,11 @@ emissions:
   wind:
     speed_mps: 3.0
     from_deg: 270
+  # Only objects inside the camera binding polygon (expanded by the margin)
+  # become emitters: ground projections near the image horizon carry huge
+  # errors and must not spawn puffs.
+  zone_filter: true
+  zone_margin_m: 10
   source_height_m: 0.5
   breathing_height_m: 1.5
   puff_interval_s: 1.0

@@ -247,7 +247,17 @@ std::string ToJson(const MapFrame& frame) {
             WriteNumber(out, field.p95, 3);
             out << '}';
         }
-        // The outer `ToJson` closes the frame object; only close "fields" here.
+        // The outer `ToJson` closes the frame object; only close "fields"
+        // here. `totals_g` is an additive v1 field (grams per pollutant),
+        // older clients ignore it.
+        out << "},\"totals_g\":{";
+        for (std::size_t i = 0; i < grid.totals_g.size(); ++i) {
+            if (i != 0) {
+                out << ',';
+            }
+            out << '"' << kNames[i] << "\":";
+            WriteNumber(out, grid.totals_g[i], 3);
+        }
         out << '}';
         break;
     }

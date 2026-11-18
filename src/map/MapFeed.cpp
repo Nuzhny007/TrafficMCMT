@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 
 namespace tmcmt::map {
@@ -22,10 +23,65 @@ MapFrame MakeEmissionFrame(const emissions::EmissionGridSnapshot& snapshot) {
         grid.fields[i].max = snapshot.stats[i].max;
         grid.fields[i].mean = snapshot.stats[i].mean;
         grid.fields[i].p95 = snapshot.stats[i].p95;
+        grid.totals_g[i] = snapshot.totals_g[i];
     }
 
     frame.emission = std::move(grid);
     return frame;
+}
+
+/// Ray-casting point-in-polygon test; `ring` is implicitly closed.
+bool PointInPolygon(const EnuPoint& point, const std::vector<EnuPoint>& ring) {
+    bool inside = false;
+    const std::size_t n = ring.size();
+    for (std::size_t i = 0, j = n - 1; i < n; j = i++) {
+        const EnuPoint& a = ring[i];
+        const EnuPoint& b = ring[j];
+        if ((a.north > point.north) == (b.north > point.north)) {
+            continue;
+        }
+        const double cross = (b.east - a.east) * (point.north - a.north) / (b.north - a.north) + a.east;
+        if (point.east < cross) {
+            inside = !inside;
+        }
+    }
+    return inside;
+}
+
+/// Shortest distance from a point to the ring boundary, metres.
+double DistanceToPolygonBoundary(const EnuPoint& point, const std::vector<EnuPoint>& ring) {
+    double best = std::numeric_limits<double>::max();
+    const std::size_t n = ring.size();
+    for (std::size_t i = 0, j = n - 1; i < n; j = i++) {
+        const EnuPoint& a = ring[i];
+        const EnuPoint& b = ring[j];
+        const double dx = b.east - a.east;
+        const double dy = b.north - a.north;
+        double t = 0.0;
+        const double lengthSq = dx * dx + dy * dy;
+        if (lengthSq > 0.0) {
+            t = std::clamp(((point.east - a.east) * dx + (point.north - a.north) * dy) / lengthSq, 0.0, 1.0);
+        }
+        const double ex = a.east + t * dx - point.east;
+        const double ey = a.north + t * dy - point.north;
+        best = std::min(best, std::hypot(ex, ey));
+    }
+    return best;
+}
+
+/// True when the point is inside any zone or within `margin` metres of one.
+bool InsideEmissionZone(const EnuPoint& point,
+                        const std::vector<std::vector<EnuPoint>>& zones,
+                        double margin) {
+    for (const std::vector<EnuPoint>& ring : zones) {
+        if (ring.size() < 3) {
+            continue;
+        }
+        if (PointInPolygon(point, ring) || DistanceToPolygonBoundary(point, ring) <= margin) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace
@@ -41,6 +97,20 @@ MapFeed::TrackState::TrackState(std::uint64_t id, int camera, std::string classN
 MapFeed::MapFeed(MapFeedConfig config) : m_config(std::move(config)), m_origin(m_config.Origin()) {
     if (m_config.emissions.enabled) {
         m_emissions.emplace(m_config.emissions, m_origin);
+        if (m_config.emission_zone_filter) {
+            // The origin is fixed at construction, so the binding polygons can
+            // be projected once and reused by every Tick.
+            for (const MapCameraConfig& camera : m_config.cameras) {
+                if (camera.polygon.empty()) {
+                    continue;
+                }
+                std::vector<EnuPoint>& ring = m_zonePolygonsEnu.emplace_back();
+                ring.reserve(camera.polygon.size());
+                for (const GeoPoint& point : camera.polygon) {
+                    ring.push_back(GeographicToEnu(point, m_origin));
+                }
+            }
+        }
     }
 }
 
@@ -145,12 +215,19 @@ std::vector<MapFrame> MapFeed::Tick(Timestamp now) {
     }
 
     if (m_emissions) {
+        const bool zoneFilter = !m_zonePolygonsEnu.empty();
+        const double zoneMargin = m_config.emission_zone_margin_m;
         std::vector<emissions::EmissionSource> sources;
         sources.reserve(m_tracks.size());
         for (const auto& [id, state] : m_tracks) {
             (void)id;
             const std::vector<EnuPoint>& points = state.trail.Points();
             if (points.empty()) {
+                continue;
+            }
+            // Objects projected outside the camera binding polygons carry
+            // huge ground errors near the image horizon; they must not emit.
+            if (zoneFilter && !InsideEmissionZone(points.back(), m_zonePolygonsEnu, zoneMargin)) {
                 continue;
             }
 

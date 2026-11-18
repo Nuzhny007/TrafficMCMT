@@ -21,6 +21,10 @@ std::string Lower(std::string text) {
 MttTrackAdapter::MttTrackAdapter(MttAdapterOptions options) : m_options(std::move(options)) {}
 
 bool MttTrackAdapter::ShouldExport(const TrackingObject& track) const {
+    if (m_options.robust_filter &&
+        !track.IsRobust(3, 0.5f, cv::Size2f(0.1f, 8.0f), 2)) {
+        return false;
+    }
     if (m_options.skip_static && track.m_isStatic) {
         return false;
     }

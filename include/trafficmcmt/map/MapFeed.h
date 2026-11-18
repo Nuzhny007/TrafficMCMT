@@ -89,6 +89,8 @@ private:
     MapIdRegistry m_ids;
     std::unordered_map<std::uint64_t, TrackState> m_tracks;
     std::optional<emissions::EmissionSimulator> m_emissions;
+    /// Camera binding polygons in ENU metres, used by the emission zone filter.
+    std::vector<std::vector<EnuPoint>> m_zonePolygonsEnu;
     std::size_t m_unknownCameraObservations = 0;
 };
 

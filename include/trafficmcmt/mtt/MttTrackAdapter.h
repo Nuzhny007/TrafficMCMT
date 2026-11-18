@@ -17,6 +17,11 @@ struct MttAdapterOptions {
     bool skip_out_of_frame = false;
     /// Minimum MTT trajectory length before a track is exported.
     int min_trace_length = 2;
+    /// Apply the Multitarget-tracker robustness heuristic
+    /// `IsRobust(3, 0.5f, cv::Size2f(0.1f, 8.0f), 2)`: drops tracks coasting
+    /// on the Kalman prediction without fresh detector raws and degenerate
+    /// boxes, so phantoms are never exported or sent downstream.
+    bool robust_filter = false;
 };
 
 /// Converts Multitarget-tracker objects into protocol observations.

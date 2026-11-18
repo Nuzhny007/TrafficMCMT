@@ -27,6 +27,10 @@ struct EmissionGridSnapshot {
     /// Row-major, south -> north, in ug/m3.
     std::array<std::vector<float>, kPollutantCount> fields;
     std::array<EmissionFieldStats, kPollutantCount> stats;
+    /// Cumulative released mass per pollutant in grams since the simulator
+    /// start (or the last `Reset`). Mass of dropped puffs is still counted:
+    /// the totals describe emissions, not what is currently airborne.
+    std::array<double, kPollutantCount> totals_g{};
 };
 
 /// Owns the puff population, spawns puffs from tracked vehicles and rasterises
@@ -96,6 +100,7 @@ private:
     ConcentrationGrid m_grid;
     std::deque<PuffState> m_puffs;
     std::unordered_map<std::uint64_t, EmitterState> m_emitters;
+    std::array<double, kPollutantCount> m_totals_g{};
     Timestamp m_last_grid{};
     bool m_has_grid = false;
     std::uint64_t m_next_puff_id = 1;

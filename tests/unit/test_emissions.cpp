@@ -443,6 +443,36 @@ TEST(Simulator, SpawnsPuffsAndBuildsDownwindField) {
     EXPECT_GT(east_mass, west_mass * 10.0);
 }
 
+TEST(Simulator, TotalsAccumulateReleasedMass) {
+    EmissionConfig config = MakeConfig();
+    // A tiny puff budget forces puffs out of the population, but the emitted
+    // mass must still accumulate: totals describe emissions, not what is
+    // currently airborne.
+    config.max_puffs = 2;
+    EmissionSimulator simulator(config, GeoPoint{kOriginLat, kOriginLon});
+    const std::vector<EmissionSource> sources{MakeSource(1, 0.0, 0.0)};
+
+    simulator.Step(Ms(0), sources);
+    simulator.Step(Ms(1000), sources);
+    simulator.Step(Ms(2000), sources);
+
+    const std::optional<EmissionGridSnapshot> first = simulator.BuildSnapshot(Ms(2000));
+    ASSERT_TRUE(first.has_value());
+    const double nox_after_two =
+        first->totals_g[static_cast<std::size_t>(Pollutant::NOx)];
+    EXPECT_GT(nox_after_two, 0.0);
+
+    simulator.Step(Ms(3000), sources);
+    const std::optional<EmissionGridSnapshot> second = simulator.BuildSnapshot(Ms(3000));
+    ASSERT_TRUE(second.has_value());
+    EXPECT_GT(second->totals_g[static_cast<std::size_t>(Pollutant::NOx)], nox_after_two);
+
+    simulator.Reset();
+    const std::optional<EmissionGridSnapshot> cleared = simulator.BuildSnapshot(Ms(3000));
+    ASSERT_TRUE(cleared.has_value());
+    EXPECT_EQ(cleared->totals_g[static_cast<std::size_t>(Pollutant::NOx)], 0.0);
+}
+
 TEST(Simulator, ExpiresOldPuffs) {
     EmissionConfig config = MakeConfig();
     config.max_age_s = 2.0;

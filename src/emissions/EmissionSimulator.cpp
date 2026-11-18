@@ -135,6 +135,7 @@ void EmissionSimulator::Spawn(Timestamp now, const EmissionSource& source, doubl
     puff.source_height_m = m_config.source_height_m;
     for (std::size_t pollutant = 0; pollutant < kPollutantCount; ++pollutant) {
         puff.mass_g[pollutant] = rates.grams_per_second[pollutant] * elapsed_s;
+        m_totals_g[pollutant] += puff.mass_g[pollutant];
     }
 
     m_puffs.push_back(puff);
@@ -196,6 +197,7 @@ std::optional<EmissionGridSnapshot> EmissionSimulator::BuildSnapshot(Timestamp n
         snapshot.fields[pollutant] = m_grid.Field(static_cast<Pollutant>(pollutant));
     }
     snapshot.stats = m_grid.Stats();
+    snapshot.totals_g = m_totals_g;
 
     m_last_grid = now;
     m_has_grid = true;
@@ -206,6 +208,7 @@ void EmissionSimulator::Reset() {
     m_puffs.clear();
     m_emitters.clear();
     m_grid.Clear();
+    m_totals_g.fill(0.0);
     m_last_grid = Timestamp{};
     m_has_grid = false;
     m_next_puff_id = 1;

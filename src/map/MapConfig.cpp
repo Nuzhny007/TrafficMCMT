@@ -314,6 +314,8 @@ Result<MapFeedConfig> LoadMapFeedConfig(const std::string& path) {
             ReadScalar(emissionsNode, "grid_hz", emission.grid_hz);
             ReadScalar(emissionsNode, "min_peak_ug_m3", emission.min_peak_ug_m3);
             ReadScalar(emissionsNode, "clamp_negative_acceleration", emission.clamp_negative_acceleration);
+            ReadScalar(emissionsNode, "zone_filter", config.emission_zone_filter);
+            ReadScalar(emissionsNode, "zone_margin_m", config.emission_zone_margin_m);
 
             if (emissionsNode["grid"]) {
                 const YAML::Node grid = emissionsNode["grid"];
@@ -448,6 +450,9 @@ Result<MapFeedConfig> LoadMapFeedConfig(const std::string& path) {
     }
     if (emission.grid.max_cols < 1 || emission.grid.max_rows < 1) {
         return Fail("emissions.grid.max_*", "must be >= 1");
+    }
+    if (config.emission_zone_margin_m < 0.0) {
+        return Fail("emissions.zone_margin_m", "must be >= 0");
     }
 
     return config;
