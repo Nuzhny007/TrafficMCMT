@@ -435,7 +435,8 @@ mtt_export ──> TrackletChunk (JSONL/protobuf)
 истёкшие треки и лишь затем формирует обновления, поэтому мёртвый трек не
 получает финальный кадр.
 
-**Конфигурация.** `configs/map_feed.yaml` (Auburn, две камеры) и
+**Конфигурация.** `configs/map_feed.yaml` (Auburn, две камеры),
+`configs/map_feed_auburn_demo.yaml` (то же для демо-ролика: TTL 1 с) и
 `configs/map_feed_aire.yaml` (Aire). Пример:
 
 ```yaml

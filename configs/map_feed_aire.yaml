@@ -16,7 +16,11 @@ feed:
   # Highway traffic is fast, but the acceleration estimate is still noisy.
   acceleration_window_s: 1.5
   acceleration_max_mps2: 3.0
-  track_ttl_s: 3.0
+  # The export stops feeding a track at its last real detection, so this TTL is
+  # exactly how long the map keeps drawing a frozen marker after a vehicle
+  # leaves the frame or slips behind an obstacle. 3 s left an obvious ghost;
+  # 1 s is still ~30x the 33 ms frame gap of a continuously detected track.
+  track_ttl_s: 1.0
   snapshot_interval_s: 0.0
   heartbeat_s: 5.0
 
