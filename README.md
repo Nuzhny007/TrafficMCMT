@@ -6,6 +6,8 @@ Master-узел многокамерного трекинга (Multi-Camera Mult
 межкамерный Re-identification, пространственно-временную фильтрацию и глобальную
 ассоциацию через min-cost flow, выдавая стабильные глобальные ID.
 
+[![Multi-Camera Traffic Monitoring and Real-Time Emissions Estimation](https://img.youtube.com/vi/L_xdTEQiT6s/0.jpg)](https://youtu.be/L_xdTEQiT6s)
+
 ## Документация
 
 | Документ | Содержание |
