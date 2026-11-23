@@ -10,11 +10,12 @@ include_guard(GLOBAL)
 include(FetchContent)
 
 # Some pinned third-party snapshots still declare cmake_minimum_required below
-# 3.5 (yaml-cpp 0.8.0 uses 3.4). CMake 4.x rejects such projects, so raise the
+# 3.10 (yaml-cpp 0.8.0 uses 3.4, Eigen 3.4.0 uses 3.5). CMake 4.x rejects
+# projects below 3.5 and warns about everything below 3.10, so raise the
 # compatibility floor for fetched dependencies only. CMake < 4 ignores this
 # variable, and installed packages are unaffected.
 if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.0 AND NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
-    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.10)
 endif()
 
 # Dependencies that were fetched instead of found as installed packages.
@@ -44,6 +45,35 @@ if(NOT spdlog_FOUND)
 endif()
 
 # ---------------------------------------------------------------------------
+# Eigen 3 (ReID index; header-only)
+# ---------------------------------------------------------------------------
+# Eigen is the only numeric dependency of the ReID module. Prefer an installed
+# package (vcpkg / distro) and fall back to FetchContent so that the CPU-only
+# CI runners build without extra setup.
+#
+# Eigen is resolved before yaml-cpp on purpose: its CMakeLists.txt declares an
+# unconditional `uninstall` custom target, while yaml-cpp only creates one when
+# the target does not exist yet. With both fetched, the reverse order makes
+# CMake fail with "add_custom_target cannot create target uninstall".
+find_package(Eigen3 3.3 CONFIG QUIET)
+if(NOT Eigen3_FOUND)
+    message(STATUS "TrafficMCMT: Eigen3 not found, fetching 3.4.0")
+    set(EIGEN_BUILD_DOC       OFF CACHE BOOL "" FORCE)
+    set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
+    set(BUILD_TESTING         OFF CACHE BOOL "" FORCE)
+    FetchContent_Declare(eigen
+        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
+        GIT_TAG        3.4.0
+        GIT_SHALLOW    TRUE)
+    FetchContent_MakeAvailable(eigen)
+    list(APPEND TMCMT_FETCHED_DEPS eigen)
+endif()
+
+if(NOT TARGET Eigen3::Eigen)
+    message(FATAL_ERROR "TrafficMCMT: Eigen3::Eigen target not found after find_package/FetchContent")
+endif()
+
+# ---------------------------------------------------------------------------
 # yaml-cpp
 # ---------------------------------------------------------------------------
 find_package(yaml-cpp CONFIG QUIET)
@@ -66,30 +96,6 @@ elseif(TARGET yaml-cpp)
     set(TMCMT_YAMLCPP_TARGET yaml-cpp)
 else()
     message(FATAL_ERROR "TrafficMCMT: yaml-cpp target not found after find_package/FetchContent")
-endif()
-
-# ---------------------------------------------------------------------------
-# Eigen 3 (ReID index; header-only)
-# ---------------------------------------------------------------------------
-# Eigen is the only numeric dependency of the ReID module. Prefer an installed
-# package (vcpkg / distro) and fall back to FetchContent so that the CPU-only
-# CI runners build without extra setup.
-find_package(Eigen3 3.3 CONFIG QUIET)
-if(NOT Eigen3_FOUND)
-    message(STATUS "TrafficMCMT: Eigen3 not found, fetching 3.4.0")
-    set(EIGEN_BUILD_DOC       OFF CACHE BOOL "" FORCE)
-    set(EIGEN_BUILD_PKGCONFIG OFF CACHE BOOL "" FORCE)
-    set(BUILD_TESTING         OFF CACHE BOOL "" FORCE)
-    FetchContent_Declare(eigen
-        GIT_REPOSITORY https://gitlab.com/libeigen/eigen.git
-        GIT_TAG        3.4.0
-        GIT_SHALLOW    TRUE)
-    FetchContent_MakeAvailable(eigen)
-    list(APPEND TMCMT_FETCHED_DEPS eigen)
-endif()
-
-if(NOT TARGET Eigen3::Eigen)
-    message(FATAL_ERROR "TrafficMCMT: Eigen3::Eigen target not found after find_package/FetchContent")
 endif()
 
 # ---------------------------------------------------------------------------
