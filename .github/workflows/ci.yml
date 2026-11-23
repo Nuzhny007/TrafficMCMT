@@ -15,12 +15,22 @@ jobs:
         os: [ubuntu-latest, windows-latest]
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
+
+      - name: Toolchain
+        run: cmake --version
+
+      - name: Compiler (Linux)
+        if: runner.os == 'Linux'
+        run: c++ --version
 
       # Stage 2 (protobuf/OpenCV) and the Multitarget-tracker bridge need
       # packages that are not available on the default runners. CI covers the
       # CPU-only core, the master node and the unit tests; stage 2 is verified
       # locally (see docs/roadmap.md).
+      #
+      # The install/export rules need installed package targets for the public
+      # dependencies; CI fetches them with FetchContent, so packaging is off.
       - name: Configure
         run: >
           cmake -S . -B build
@@ -28,6 +38,7 @@ jobs:
           -DTRAFFICMCMT_WITH_EDGE=OFF
           -DTRAFFICMCMT_WITH_MTT=OFF
           -DTRAFFICMCMT_WITH_PROTOBUF=OFF
+          -DTRAFFICMCMT_INSTALL=OFF
           -DTRAFFICMCMT_BUILD_TESTS=ON
 
       - name: Build

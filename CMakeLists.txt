@@ -26,6 +26,7 @@ option(TRAFFICMCMT_WITH_MAP       "Map feed: tracklets -> viewer protocol" ON)
 option(TRAFFICMCMT_WITH_WS        "WebSocket server for the map feed" ON)
 option(TRAFFICMCMT_WITH_FAISS     "FAISS vector index (stage 3)" OFF)
 option(TRAFFICMCMT_WITH_MUSSP     "muSSP min-cost flow solver (stage 5)" OFF)
+option(TRAFFICMCMT_INSTALL        "Generate install/export rules" ON)
 set(TRAFFICMCMT_MUSSP_SOURCE_DIR "" CACHE PATH
     "Path to a muSSP checkout (must contain muSSP/Graph.cpp)")
 
@@ -33,6 +34,21 @@ list(APPEND CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake")
 include(GNUInstallDirs)
 include(Dependencies)
 include(CompilerWarnings)
+
+# Exporting TrafficMCMT requires its public dependencies to be imported package
+# targets. FetchContent targets are not part of any export set, so
+# install(EXPORT) fails when spdlog/yaml-cpp/etc. were fetched. Disable the
+# install rules in that case; a packaging build should use installed packages.
+if(TMCMT_FETCHED_DEPS)
+    message(STATUS "TrafficMCMT: fetched dependencies: ${TMCMT_FETCHED_DEPS}")
+    if(TRAFFICMCMT_INSTALL)
+        message(STATUS
+            "TrafficMCMT: install/export rules disabled because dependencies "
+            "were fetched; install them as packages to enable packaging, or "
+            "pass -DTRAFFICMCMT_INSTALL=OFF to silence this message")
+        set(TRAFFICMCMT_INSTALL OFF)
+    endif()
+endif()
 
 # ---------------------------------------------------------------------------
 # Core library: domain types, configuration, logging.
@@ -549,41 +565,43 @@ endif()
 # ---------------------------------------------------------------------------
 # Install / package config
 # ---------------------------------------------------------------------------
-include(CMakePackageConfigHelpers)
+if(TRAFFICMCMT_INSTALL)
+    include(CMakePackageConfigHelpers)
 
-install(TARGETS ${TMCMT_INSTALL_TARGETS}
-    EXPORT TrafficMCMTTargets
-    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
+    install(TARGETS ${TMCMT_INSTALL_TARGETS}
+        EXPORT TrafficMCMTTargets
+        ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR})
 
-install(DIRECTORY include/
-    DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
+    install(DIRECTORY include/
+        DESTINATION ${CMAKE_INSTALL_INCLUDEDIR})
 
-install(EXPORT TrafficMCMTTargets
-    FILE TrafficMCMTTargets.cmake
-    NAMESPACE TrafficMCMT::
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TrafficMCMT)
+    install(EXPORT TrafficMCMTTargets
+        FILE TrafficMCMTTargets.cmake
+        NAMESPACE TrafficMCMT::
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TrafficMCMT)
 
-configure_package_config_file(
-    cmake/TrafficMCMTConfig.cmake.in
-    "${CMAKE_CURRENT_BINARY_DIR}/TrafficMCMTConfig.cmake"
-    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TrafficMCMT)
+    configure_package_config_file(
+        cmake/TrafficMCMTConfig.cmake.in
+        "${CMAKE_CURRENT_BINARY_DIR}/TrafficMCMTConfig.cmake"
+        INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TrafficMCMT)
 
-write_basic_package_version_file(
-    "${CMAKE_CURRENT_BINARY_DIR}/TrafficMCMTConfigVersion.cmake"
-    VERSION ${PROJECT_VERSION}
-    COMPATIBILITY SameMajorVersion)
+    write_basic_package_version_file(
+        "${CMAKE_CURRENT_BINARY_DIR}/TrafficMCMTConfigVersion.cmake"
+        VERSION ${PROJECT_VERSION}
+        COMPATIBILITY SameMajorVersion)
 
-install(FILES
-    "${CMAKE_CURRENT_BINARY_DIR}/TrafficMCMTConfig.cmake"
-    "${CMAKE_CURRENT_BINARY_DIR}/TrafficMCMTConfigVersion.cmake"
-    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TrafficMCMT)
+    install(FILES
+        "${CMAKE_CURRENT_BINARY_DIR}/TrafficMCMTConfig.cmake"
+        "${CMAKE_CURRENT_BINARY_DIR}/TrafficMCMTConfigVersion.cmake"
+        DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/TrafficMCMT)
 
-install(FILES
-    configs/master.yaml
-    configs/logging.yaml
-    configs/map_feed.yaml
-    configs/map_feed_aire.yaml
-    configs/camera_links.yaml
-    DESTINATION ${CMAKE_INSTALL_DATADIR}/trafficmcmt)
+    install(FILES
+        configs/master.yaml
+        configs/logging.yaml
+        configs/map_feed.yaml
+        configs/map_feed_aire.yaml
+        configs/camera_links.yaml
+        DESTINATION ${CMAKE_INSTALL_DATADIR}/trafficmcmt)
+endif()

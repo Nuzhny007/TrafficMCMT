@@ -88,6 +88,24 @@ cmake --build build/release --config Release
 ctest --test-dir build/release -C Release --output-on-failure
 ```
 
+### Запуск тестов без правки PATH
+
+Локальная сборка линкует CUDA-сборку OpenCV, protobuf из vcpkg и
+Multitarget-tracker, поэтому без их DLL в `PATH` тесты падают с `0xc0000135`
+(DLL not found). Скрипт читает `CMakeCache.txt` сборки и добавляет нужные
+каталоги (OpenCV, CUDA, cuDNN, OpenVINO/TBB, vcpkg, MTT) в `PATH` текущего
+процесса:
+
+```powershell
+.\scripts\dev-env.ps1
+ctest --test-dir build/local-release -C Release --output-on-failure
+```
+
+`-Show` печатает каталоги, ничего не меняя; `-BuildDir` и `-Configuration`
+указывают другую сборку; `-ExtraPath` добавляет свои каталоги. Если политика
+выполнения запрещает локальные скрипты, запустите через
+`powershell -NoProfile -ExecutionPolicy Bypass -File scripts\dev-env.ps1`.
+
 ## Сборка (Linux)
 
 ```bash

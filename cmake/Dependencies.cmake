@@ -9,6 +9,19 @@ include_guard(GLOBAL)
 
 include(FetchContent)
 
+# Some pinned third-party snapshots still declare cmake_minimum_required below
+# 3.5 (yaml-cpp 0.8.0 uses 3.4). CMake 4.x rejects such projects, so raise the
+# compatibility floor for fetched dependencies only. CMake < 4 ignores this
+# variable, and installed packages are unaffected.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.0 AND NOT DEFINED CMAKE_POLICY_VERSION_MINIMUM)
+    set(CMAKE_POLICY_VERSION_MINIMUM 3.5)
+endif()
+
+# Dependencies that were fetched instead of found as installed packages.
+# CMake cannot export targets that link against such non-imported targets, so
+# the install/export rules are disabled when this list is non-empty.
+set(TMCMT_FETCHED_DEPS "")
+
 set(THREADS_PREFER_PTHREAD_FLAG ON)
 find_package(Threads REQUIRED)
 
@@ -27,6 +40,7 @@ if(NOT spdlog_FOUND)
         GIT_TAG        v1.14.1
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(spdlog)
+    list(APPEND TMCMT_FETCHED_DEPS spdlog)
 endif()
 
 # ---------------------------------------------------------------------------
@@ -43,6 +57,7 @@ if(NOT yaml-cpp_FOUND)
         GIT_TAG        0.8.0
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(yaml-cpp)
+    list(APPEND TMCMT_FETCHED_DEPS yaml-cpp)
 endif()
 
 if(TARGET yaml-cpp::yaml-cpp)
@@ -70,6 +85,7 @@ if(NOT Eigen3_FOUND)
         GIT_TAG        3.4.0
         GIT_SHALLOW    TRUE)
     FetchContent_MakeAvailable(eigen)
+    list(APPEND TMCMT_FETCHED_DEPS eigen)
 endif()
 
 if(NOT TARGET Eigen3::Eigen)
@@ -90,6 +106,7 @@ if(TRAFFICMCMT_BUILD_TESTS)
             GIT_TAG        v1.15.2
             GIT_SHALLOW    TRUE)
         FetchContent_MakeAvailable(googletest)
+        list(APPEND TMCMT_FETCHED_DEPS googletest)
     endif()
 endif()
 
